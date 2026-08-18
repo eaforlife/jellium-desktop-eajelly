@@ -7,6 +7,7 @@ pub struct Version {
     pub full: String,
     /// Numeric `major.minor.patch` form for platform metadata that rejects
     /// SemVer pre-release/build suffixes (notably macOS bundle versions).
+    #[cfg(target_os = "macos")]
     pub numeric: String,
 }
 
@@ -25,6 +26,7 @@ pub fn git_info() -> (Option<String>, bool) {
 
 pub fn read() -> Result<Version> {
     let raw = env!("CARGO_PKG_VERSION").to_string();
+    #[cfg(target_os = "macos")]
     let numeric = raw.split('-').next().unwrap_or(&raw).to_string();
     let full = match (raw.contains('-'), git_info()) {
         (true, (Some(hash), dirty)) => {
@@ -33,7 +35,11 @@ pub fn read() -> Result<Version> {
         }
         _ => raw,
     };
-    Ok(Version { full, numeric })
+    Ok(Version {
+        full,
+        #[cfg(target_os = "macos")]
+        numeric,
+    })
 }
 
 pub fn cef_package_version() -> Result<String> {
