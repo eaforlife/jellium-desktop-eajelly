@@ -14,6 +14,8 @@ Download the installer for your system from the [latest GitHub release](https://
 
 Download the `windows-x64-setup.exe` installer for standard Intel/AMD Windows PCs, or `windows-arm64-setup.exe` for Windows on ARM. Run the installer and launch **Jellium Desktop eajelly** from the Start menu. Portable `.zip` builds are also attached to each release.
 
+If the old **Jellyfin Desktop** app is installed, remove it from **Windows Settings > Apps** first. The Jellium Desktop eajelly installer checks for that legacy app and will not continue until it has been uninstalled.
+
 ### macOS
 
 Download the DMG matching your Mac (`arm64` for Apple Silicon or `x86_64` for Intel), open it, and drag **Jellium Desktop** into Applications.
@@ -42,13 +44,6 @@ chmod +x JelliumDesktop-*.AppImage
 ## Versions and updates
 
 The eajelly release line starts at `3.0.0-eajelly`. Right-click in the app and choose **Check for Updates** (or open **About**) to compare the installed version with the latest GitHub release and open its download page when an update is available.
-
-Maintainers can create a release by pushing a matching version tag, for example:
-
-```sh
-git tag v3.0.0-eajelly
-git push origin v3.0.0-eajelly
-```
 
 The GitHub Actions workflows build Windows installers and portable archives, macOS DMGs, Linux AppImages, Debian packages, and a Flatpak bundle. Tag builds attach their outputs to the GitHub release automatically.
 

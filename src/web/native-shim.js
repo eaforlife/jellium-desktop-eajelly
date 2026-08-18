@@ -1,6 +1,36 @@
 (function() {
     console.debug('[Media] Installing native shim...');
 
+    // This branded client has exactly one server. Jellyfin normally sends a
+    // signed-out user to its server picker; reconnect to the current server
+    // instead so its normal username/password page is shown.
+    const isServerPickerRoute = () =>
+        /(?:^|[\/#])selectserver(?:\.html)?(?:[/?#]|$)/i.test(
+            window.location.pathname + window.location.search + window.location.hash
+        );
+    const reconnectToCurrentServer = () => {
+        if (!isServerPickerRoute()) return;
+
+        const path = window.location.pathname;
+        const webIndex = path.toLowerCase().indexOf('/web/');
+        const serverPath = webIndex >= 0 ? path.slice(0, webIndex + 1) : '/';
+        const serverUrl = window.location.origin + serverPath;
+        console.info('[Media] Server picker blocked; reconnecting to:', serverUrl);
+        window.location.replace(serverUrl);
+    };
+    const scheduleServerReconnect = () => setTimeout(reconnectToCurrentServer, 0);
+    window.addEventListener('hashchange', scheduleServerReconnect);
+    window.addEventListener('popstate', scheduleServerReconnect);
+    for (const method of ['pushState', 'replaceState']) {
+        const original = window.history[method];
+        window.history[method] = function(...args) {
+            const result = original.apply(this, args);
+            scheduleServerReconnect();
+            return result;
+        };
+    }
+    reconnectToCurrentServer();
+
     // Fullscreen state tracking via HTML5 Fullscreen API
     window._isFullscreen = false;
 

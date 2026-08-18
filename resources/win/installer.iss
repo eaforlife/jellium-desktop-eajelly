@@ -49,3 +49,62 @@ Name: "{autodesktop}\Jellium Desktop eajelly"; Filename: "{app}\jellium-desktop.
 
 [Run]
 Filename: "{app}\jellium-desktop.exe"; Description: "Launch Jellium Desktop eajelly"; Flags: nowait postinstall skipifsilent
+
+[Code]
+const
+  UninstallRegistryPath = 'Software\Microsoft\Windows\CurrentVersion\Uninstall';
+  LegacyJellyfinAppId = '{a78bea4a-5bd0-4aa3-bdf3-579b4f58a921}_is1';
+
+function LegacyJellyfinDesktopInRegistry(RootKey: HKEY): Boolean;
+var
+  DisplayName: String;
+  I: Integer;
+  Subkeys: TArrayOfString;
+begin
+  Result := RegKeyExists(
+    RootKey,
+    UninstallRegistryPath + '\' + LegacyJellyfinAppId
+  );
+  if Result then
+    Exit;
+
+  { Also cover older MSI/WiX releases whose product key changed by version. }
+  if not RegGetSubkeyNames(RootKey, UninstallRegistryPath, Subkeys) then
+    Exit;
+
+  for I := 0 to GetArrayLength(Subkeys) - 1 do
+  begin
+    if RegQueryStringValue(
+      RootKey,
+      UninstallRegistryPath + '\' + Subkeys[I],
+      'DisplayName',
+      DisplayName
+    ) and (CompareText(Trim(DisplayName), 'Jellyfin Desktop') = 0) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
+function LegacyJellyfinDesktopInstalled: Boolean;
+begin
+  Result :=
+    LegacyJellyfinDesktopInRegistry(HKCU32) or
+    LegacyJellyfinDesktopInRegistry(HKCU64) or
+    LegacyJellyfinDesktopInRegistry(HKLM32) or
+    LegacyJellyfinDesktopInRegistry(HKLM64);
+end;
+
+function InitializeSetup: Boolean;
+begin
+  Result := not LegacyJellyfinDesktopInstalled;
+  if not Result then
+    MsgBox(
+      'The old Jellyfin Desktop app is still installed.' + #13#10 + #13#10 +
+      'Uninstall Jellyfin Desktop from Windows Settings > Apps before ' +
+      'installing Jellium Desktop eajelly.',
+      mbError,
+      MB_OK
+    );
+end;
