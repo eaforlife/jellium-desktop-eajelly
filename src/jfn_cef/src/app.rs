@@ -617,6 +617,14 @@ fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
         &jfn_config::cli_json(jfn_mpv::hwdec_options()),
     );
     replace_first(&mut code, "__APP_VERSION__", crate::APP_VERSION);
+    let update_asset_suffix = if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
+        "-windows-arm64-setup.exe"
+    } else if cfg!(target_os = "windows") {
+        "-windows-x64-setup.exe"
+    } else {
+        ""
+    };
+    replace_first(&mut code, "__UPDATE_ASSET_SUFFIX__", update_asset_suffix);
     let decoration_options = profile
         .window_decoration_options()
         .iter()

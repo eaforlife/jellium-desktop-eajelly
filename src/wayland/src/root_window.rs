@@ -57,7 +57,7 @@ use crate::runtime::WlRuntime;
 use crate::wl_state::{InitError, ShmGlobal, bind_error, new_slot_pool};
 
 const APP_ID: &str = "net.nullsum.JelliumDesktop";
-const TITLE: &str = "Jellium Desktop";
+const TITLE: &str = "Jellium Desktop - EAJelly";
 
 // Background behind the video/overlay, matching kBgColor (0x101010).
 const BG: [u8; 3] = [0x10, 0x10, 0x10];

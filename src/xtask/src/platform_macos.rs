@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const MACOS_APP_NAME: &str = "Jellium Desktop.app";
+const MACOS_APP_NAME: &str = "Jellium Desktop - EAJelly.app";
 const FRAMEWORK_NAME: &str = "Chromium Embedded Framework";
 
 pub fn stage_cef(out: &Path, cef: &cef::Cef) -> Result<()> {

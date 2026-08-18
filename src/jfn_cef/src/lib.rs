@@ -21,6 +21,7 @@ pub mod platform_ops;
 mod resource;
 pub mod sink_routing;
 mod state;
+mod updater;
 mod v8_handler;
 pub mod version;
 pub mod window_controls;

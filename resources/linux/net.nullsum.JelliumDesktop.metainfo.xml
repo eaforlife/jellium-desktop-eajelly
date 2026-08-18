@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>net.nullsum.JelliumDesktop</id>
-  <name>Jellium Desktop</name>
+  <name>Jellium Desktop - EAJelly</name>
   <summary>Jellyfin media client for desktop</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-2.0-or-later</project_license>

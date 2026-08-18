@@ -43,6 +43,25 @@ jobs:
         with:
           platform: ${{ github.workflow }}-${{ matrix.arch }}
 
+      - name: Read mpv revision
+        id: mpv
+        shell: bash
+        run: echo "revision=$(git -C third_party/mpv rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache built mpv
+        id: mpv-cache
+        uses: actions/cache@v6
+        with:
+          path: third_party/mpv-install
+          key: mpv-windows-v1-${{ matrix.arch }}-${{ steps.mpv.outputs.revision }}-${{ hashFiles('dev/windows/build_mpv_source.ps1') }}
+
+      - name: Cache Rust build dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src -> ../build/cargo-target
+          shared-key: windows-${{ matrix.arch }}
+          cache-on-failure: true
+
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
@@ -62,9 +81,10 @@ jobs:
             ${{ matrix.pkg_prefix }}-llvm
 
       - name: Build mpv from source
+        if: steps.mpv-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          dev\windows\build_mpv_source.ps1 -Arch ${{ matrix.arch }} -Force
+          dev\windows\build_mpv_source.ps1 -Arch ${{ matrix.arch }}
 
       - name: Build and package
         shell: cmd
@@ -81,6 +101,11 @@ jobs:
           # etc.) get parsed against the wrong default target. Pin it.
           BINDGEN_EXTRA_CLANG_ARGS: --target=${{ matrix.triple }}
           MATRIX_ARCH: ${{ matrix.arch }}
+          # The workspace's fat LTO + one codegen unit is unnecessarily slow
+          # for CI packaging. Thin LTO retains cross-crate optimization while
+          # allowing the Windows release build to compile/link in parallel.
+          CARGO_PROFILE_RELEASE_LTO: thin
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 4
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvarsall.bat" %MATRIX_ARCH% || exit /b 1

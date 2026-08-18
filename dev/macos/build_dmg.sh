@@ -5,7 +5,7 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${0}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-APP_NAME="Jellium Desktop.app"
+APP_NAME="Jellium Desktop - EAJelly.app"
 APP_DIR="${PROJECT_ROOT}/build/output/${APP_NAME}"
 DIST_DIR="${PROJECT_ROOT}/dist"
 
@@ -22,7 +22,7 @@ DMG_NAME="JelliumDesktop-${VERSION}-macos-${ARCH}.dmg"
 rm -f "${DIST_DIR}/${DMG_NAME}"
 
 create-dmg \
-    --volname "Jellium Desktop v${VERSION}" \
+    --volname "Jellium Desktop - EAJelly v${VERSION}" \
     --no-internet-enable \
     --window-size 500 300 \
     --icon-size 100 \

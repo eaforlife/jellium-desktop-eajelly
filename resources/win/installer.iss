@@ -13,19 +13,19 @@
 
 [Setup]
 AppId={{6F46FC31-79CF-49CF-91C1-87710731168B}
-AppName=Jellium Desktop eajelly
+AppName=Jellium Desktop - EAJelly
 AppVersion={#AppVersion}
 AppPublisher=eajelly
 AppPublisherURL=https://github.com/eaforlife/jellium-desktop-eajelly
 AppSupportURL=https://github.com/eaforlife/jellium-desktop-eajelly/issues
-DefaultDirName={autopf}\Jellium Desktop eajelly
-DefaultGroupName=Jellium Desktop eajelly
+DefaultDirName={autopf}\Jellium Desktop - EAJelly
+DefaultGroupName=Jellium Desktop - EAJelly
 DisableProgramGroupPage=yes
 OutputDir={#OutputDir}
 OutputBaseFilename=JelliumDesktop-{#AppVersion}-windows-{#AppArch}-setup
 SetupIconFile=jellyfin.ico
 UninstallDisplayIcon={app}\jellium-desktop.exe
-Compression=lzma2
+Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
@@ -44,11 +44,15 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Jellium Desktop eajelly"; Filename: "{app}\jellium-desktop.exe"
-Name: "{autodesktop}\Jellium Desktop eajelly"; Filename: "{app}\jellium-desktop.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Jellium Desktop - EAJelly"; Filename: "{app}\jellium-desktop.exe"
+Name: "{autodesktop}\Jellium Desktop - EAJelly"; Filename: "{app}\jellium-desktop.exe"; Tasks: desktopicon
+
+[InstallDelete]
+Type: files; Name: "{autoprograms}\Jellium Desktop eajelly.lnk"
+Type: files; Name: "{autodesktop}\Jellium Desktop eajelly.lnk"
 
 [Run]
-Filename: "{app}\jellium-desktop.exe"; Description: "Launch Jellium Desktop eajelly"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\jellium-desktop.exe"; Description: "Launch Jellium Desktop - EAJelly"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const
@@ -103,7 +107,7 @@ begin
     MsgBox(
       'The old Jellyfin Desktop app is still installed.' + #13#10 + #13#10 +
       'Uninstall Jellyfin Desktop from Windows Settings > Apps before ' +
-      'installing Jellium Desktop eajelly.',
+      'installing Jellium Desktop - EAJelly.',
       mbError,
       MB_OK
     );

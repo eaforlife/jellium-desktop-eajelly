@@ -161,7 +161,7 @@ impl Root {
 
     #[zbus(property)]
     fn identity(&self) -> &str {
-        "Jellium Desktop"
+        "Jellium Desktop - EAJelly"
     }
     #[zbus(property)]
     fn can_quit(&self) -> bool {

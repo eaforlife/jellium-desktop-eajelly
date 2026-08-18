@@ -411,6 +411,14 @@ fn handle_message(message: BrowserMessage) -> bool {
             jfn_shutdown_initiate();
             true
         }
+        "installUpdate" => with_args(args, |a| {
+            let url = list_string(a, 0);
+            let digest = list_string(a, 1);
+            let expected_size = u64::try_from(list_int(a, 2)).unwrap_or_default();
+            if !crate::updater::install(&url, &digest, expected_size) {
+                tracing::warn!(target: "Updater", "Rejected update request");
+            }
+        }),
         "openConfigDir" => {
             jfn_logging::log(
                 jfn_logging::CATEGORY_CEF,

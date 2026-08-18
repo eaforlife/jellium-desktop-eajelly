@@ -1,6 +1,6 @@
-# Jellium Desktop eajelly
+# Jellium Desktop - EAJelly
 
-Jellium Desktop eajelly is a preconfigured fork of [Jellium Desktop](https://github.com/andrewrabert/jellium-desktop), the unofficial [Jellyfin](https://jellyfin.org) desktop client built with [CEF](https://github.com/chromiumembedded/cef) and [mpv](https://mpv.io/).
+Jellium Desktop - EAJelly is a preconfigured fork of [Jellium Desktop](https://github.com/andrewrabert/jellium-desktop), the unofficial [Jellyfin](https://jellyfin.org) desktop client built with [CEF](https://github.com/chromiumembedded/cef) and [mpv](https://mpv.io/).
 
 This fork opens the eajelly service directly and never asks users to enter a server address. At startup it briefly checks the private LAN server. If that endpoint returns valid Jellyfin server information, the app uses it; otherwise it automatically uses `http://eajelly.xyz`. Users proceed directly to the normal username and password screen.
 
@@ -15,18 +15,18 @@ Download the installer for your system from the [latest GitHub release](https://
 1. Uninstall the old **Jellyfin Desktop** application from **Settings > Apps > Installed apps**. Do not uninstall your Jellyfin server.
 2. Download `JelliumDesktop-<version>-windows-x64-setup.exe` for a standard Intel/AMD PC, or `JelliumDesktop-<version>-windows-arm64-setup.exe` for Windows on ARM.
 3. Run the installer. It will stop and show a warning if the old Jellyfin Desktop client is still installed.
-4. Open **Jellium Desktop eajelly** from the Start menu or desktop shortcut. The new application is listed under this name, not **Jellyfin Desktop**.
+4. Open **Jellium Desktop - EAJelly** from the Start menu or desktop shortcut. The new application is listed under this name, not **Jellyfin Desktop**.
 
 Portable `.zip` builds are also attached to each release. Extract the complete archive before running `jellium-desktop.exe`; uninstall the old Jellyfin Desktop client first because portable builds do not run the installer prerequisite check.
 
 ### macOS
 
-Download `JelliumDesktop-<version>-macos-arm64.dmg` for Apple Silicon or `JelliumDesktop-<version>-macos-x86_64.dmg` for an Intel Mac. Open it and drag **Jellium Desktop** into Applications.
+Download `JelliumDesktop-<version>-macos-arm64.dmg` for Apple Silicon or `JelliumDesktop-<version>-macos-x86_64.dmg` for an Intel Mac. Open it and drag **Jellium Desktop - EAJelly** into Applications.
 
 The builds are not Apple-notarized. If macOS quarantines the app, run:
 
 ```sh
-sudo xattr -cr "/Applications/Jellium Desktop.app"
+sudo xattr -cr "/Applications/Jellium Desktop - EAJelly.app"
 ```
 
 ### Debian and Ubuntu
@@ -54,7 +54,7 @@ To verify the decoder selected by mpv, play the video and inspect `%LOCALAPPDATA
 
 ## Versions and updates
 
-The eajelly release line starts at `3.0.0-eajelly`. Right-click in the app and choose **Check for Updates** (or open **About**) to compare the installed version with the latest GitHub release and open its download page when an update is available.
+The eajelly release line starts at `3.0.0-eajelly`. On Windows, the app checks GitHub Releases shortly after launch. When an update is available, choose **Download and install** to download the architecture-matched installer; the app closes and opens the installer when it is ready. You can also right-click and choose **Check for Updates** or open **About**. macOS and Linux currently use the manual release-page flow.
 
 The GitHub Actions workflows build Windows installers and portable archives, macOS DMGs, Linux AppImages, Debian packages, and a Flatpak bundle. Tag builds attach their outputs to the GitHub release automatically.
 

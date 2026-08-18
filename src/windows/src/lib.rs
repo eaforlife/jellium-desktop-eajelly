@@ -193,7 +193,10 @@ impl Platform for WindowsPlatform {
     fn menu_delivery(&self, kind: MenuKind) -> MenuDelivery {
         match kind {
             MenuKind::ContextMenu => MenuDelivery::Host(&menu::WinMenuHost),
-            MenuKind::Dropdown => MenuDelivery::Composited,
+            // CEF's OSR popup surface is unreliable for HTML <select> on
+            // Windows and can leave every client-settings dropdown inert.
+            // Use the in-page menu implementation already used by X11.
+            MenuKind::Dropdown => MenuDelivery::Page,
         }
     }
 

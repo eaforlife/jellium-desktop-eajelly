@@ -32,6 +32,10 @@ slotmap.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 nix.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+sha2 = "0.10"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
 
 [build-dependencies]
 gix = { workspace = true }

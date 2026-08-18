@@ -23,7 +23,7 @@ use crate::x11_state::{
 /// Must match `StartupWMClass` in `net.nullsum.JelliumDesktop.desktop` so the
 /// DE resolves the window to that desktop file for the taskbar icon.
 const WM_CLASS_VALUE: &[u8] = b"net.nullsum.JelliumDesktop\0net.nullsum.JelliumDesktop\0";
-const APP_TITLE: &[u8] = b"Jellium Desktop";
+const APP_TITLE: &[u8] = b"Jellium Desktop - EAJelly";
 
 /// Advertise the app top-level's identity and, when the full XSync handshake can
 /// be established, the `_NET_WM_SYNC_REQUEST` protocol. Returns the created sync

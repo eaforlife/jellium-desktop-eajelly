@@ -105,6 +105,33 @@
     // Saved settings from native (injected as placeholder, replaced at load time)
     const _savedSettings = JSON.parse('__SETTINGS_JSON__');
 
+    // Older builds could render the effective "auto" value while receiving
+    // no usable choices for the select menu. Keep a platform-appropriate
+    // fallback in the web layer so the control remains functional even if an
+    // older/native settings payload omits hwdecOptions.
+    const _platform = String(navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+    const _fallbackHwdecOptions = _platform.includes('win')
+        ? ['auto', 'no', 'd3d11va', 'nvdec', 'vulkan']
+        : _platform.includes('mac')
+            ? ['auto', 'no', 'videotoolbox', 'vulkan']
+            : ['auto', 'no', 'vaapi', 'nvdec', 'vulkan'];
+    const _nativeHwdecOptions = Array.isArray(_savedSettings.hwdecOptions)
+        ? _savedSettings.hwdecOptions.filter(value => typeof value === 'string' && value.length > 0)
+        : [];
+    const _hwdecOptions = (_nativeHwdecOptions.length ? _nativeHwdecOptions : _fallbackHwdecOptions)
+        .map(value => ({
+            value,
+            title: {
+                auto: 'Auto (hardware first)',
+                no: 'Disabled (software)',
+                d3d11va: 'D3D11VA',
+                nvdec: 'NVIDIA NVDEC',
+                vaapi: 'VA-API',
+                videotoolbox: 'VideoToolbox',
+                vulkan: 'Vulkan'
+            }[value] || value
+        }));
+
     // window.jmpInfo - settings and device info
     window.jmpInfo = {
         version: '__APP_VERSION__',
@@ -141,7 +168,7 @@
         },
         settingsDescriptions: {
             playback: [
-                { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Hardware video decoding mode. Use "auto" for automatic detection or "no" to disable. Changes apply immediately.', options: _savedSettings.hwdecOptions }
+                { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Auto tries hardware decoding first and falls back to software when needed. Changes apply immediately.', options: _hwdecOptions }
             ],
             audio: [
                 { key: 'audioPassthrough', displayName: 'Audio Passthrough', help: 'Comma-separated list of codecs to pass through to the audio device (e.g. ac3,eac3,dts-hd,truehd). Leave empty to disable.', inputType: 'textarea' },
@@ -434,7 +461,7 @@
         init() {
             return Promise.resolve({
                 deviceName: jmpInfo.deviceName,
-                appName: 'Jellium Desktop',
+                appName: 'Jellium Desktop - EAJelly',
                 appVersion: jmpInfo.version
             });
         },
@@ -452,7 +479,7 @@
         },
         getDeviceProfile,
         getSyncProfile: getDeviceProfile,
-        appName() { return 'Jellium Desktop'; },
+        appName() { return 'Jellium Desktop - EAJelly'; },
         appVersion() { return jmpInfo.version; },
         deviceName() { return jmpInfo.deviceName; },
         exit() { window.api.system.exit(); }
@@ -534,6 +561,84 @@
                 }
             }).observe(document.head, { childList: true });
         }
+
+        // Check once per launch. On Windows, accepting the prompt downloads
+        // the architecture-matched Inno installer in native code, launches it,
+        // and then cleanly closes this process. Other platforms retain the
+        // manual updater in About until a native package handoff is available.
+        setTimeout(() => {
+            const assetSuffix = '__UPDATE_ASSET_SUFFIX__';
+            if (!assetSuffix || document.getElementById('_jelliumUpdate')) return;
+
+            const versionParts = value => String(value || '')
+                .trim()
+                .replace(/^v/i, '')
+                .split(/[+-]/, 1)[0]
+                .split('.')
+                .map(part => parseInt(part, 10) || 0);
+            const isNewer = (candidate, current) => {
+                const left = versionParts(candidate);
+                const right = versionParts(current);
+                for (let i = 0; i < Math.max(left.length, right.length, 3); i++) {
+                    const difference = (left[i] || 0) - (right[i] || 0);
+                    if (difference) return difference > 0;
+                }
+                return false;
+            };
+
+            fetch('https://api.github.com/repos/eaforlife/jellium-desktop-eajelly/releases/latest', {
+                cache: 'no-store'
+            })
+                .then(response => {
+                    if (!response.ok) throw new Error('HTTP ' + response.status);
+                    return response.json();
+                })
+                .then(release => {
+                    const latest = release.tag_name || release.name;
+                    if (!latest || !isNewer(latest, jmpInfo.version)) return;
+                    const asset = Array.isArray(release.assets)
+                        ? release.assets.find(item => String(item.name || '').endsWith(assetSuffix))
+                        : null;
+                    if (!asset || !asset.browser_download_url || !asset.digest || !asset.size) return;
+
+                    const host = document.createElement('div');
+                    host.id = '_jelliumUpdate';
+                    host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+                    const box = document.createElement('div');
+                    box.style.cssText = 'width:min(440px,calc(100vw - 40px));padding:22px;border-radius:8px;background:#202020;color:#eee;font:14px/1.45 sans-serif;box-shadow:0 8px 32px #000';
+                    const title = document.createElement('h2');
+                    title.textContent = 'Jellium Desktop - EAJelly update';
+                    title.style.cssText = 'margin:0 0 10px;font-size:20px';
+                    const message = document.createElement('p');
+                    message.textContent = `${latest} is available. Download it now? The app will close and the installer will open when the download finishes.`;
+                    message.style.cssText = 'margin:0 0 18px;color:#ccc';
+                    const actions = document.createElement('div');
+                    actions.style.cssText = 'display:flex;justify-content:flex-end;gap:10px';
+                    const later = document.createElement('button');
+                    later.textContent = 'Later';
+                    const install = document.createElement('button');
+                    install.textContent = 'Download and install';
+                    for (const button of [later, install]) {
+                        button.style.cssText = 'border:0;border-radius:4px;padding:8px 12px;cursor:pointer';
+                    }
+                    install.style.background = '#00a4dc';
+                    install.style.color = '#fff';
+                    later.addEventListener('click', () => host.remove());
+                    install.addEventListener('click', () => {
+                        if (!window.jmpNative || !window.jmpNative.installUpdate) return;
+                        later.disabled = true;
+                        install.disabled = true;
+                        install.textContent = 'Downloading…';
+                        message.textContent = 'Downloading the update. Jellium Desktop - EAJelly will close automatically when the installer is ready.';
+                        window.jmpNative.installUpdate(asset.browser_download_url, asset.digest, asset.size);
+                    });
+                    actions.append(later, install);
+                    box.append(title, message, actions);
+                    host.appendChild(box);
+                    document.body.appendChild(host);
+                })
+                .catch(error => console.warn('[Updater] Launch check failed:', error));
+        }, 5000);
     });
 
     console.debug('[Media] Native shim installed');

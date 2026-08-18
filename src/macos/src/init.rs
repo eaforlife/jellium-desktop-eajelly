@@ -891,14 +891,21 @@ pub fn macos_early_init() {
 
         add_menu_item(
             app_menu,
-            "About Jellium Desktop",
+            "About Jellium Desktop - EAJelly",
             sel!(showAbout:),
             "",
             Some(mt_obj),
             0,
         );
         add_separator(app_menu);
-        add_menu_item(app_menu, "Hide Jellium Desktop", sel!(hide:), "h", None, 0);
+        add_menu_item(
+            app_menu,
+            "Hide Jellium Desktop - EAJelly",
+            sel!(hide:),
+            "h",
+            None,
+            0,
+        );
         // NSEventModifierFlagOption | NSEventModifierFlagCommand
         // = (1 << 19) | (1 << 20).
         let opt_cmd_mask: u64 = (1u64 << 19) | (1u64 << 20);

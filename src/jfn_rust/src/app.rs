@@ -332,7 +332,7 @@ fn publish_device_profile(mpv_raw: *mut jfn_mpv::sys::mpv_handle) {
     let profile = jfn_jellyfin::build_device_profile(
         &decoders,
         &caps.demuxers,
-        "Jellium Desktop",
+        "Jellium Desktop - EAJelly",
         APP_VERSION_FULL,
         force,
     );
@@ -536,10 +536,7 @@ fn init_main_browser(
 /// same port cannot become the app server by accident.
 fn local_jellyfin_available() -> bool {
     const PROBE_TIMEOUT: Duration = Duration::from_millis(900);
-    let address = SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::new(192, 168, 250, 249)),
-        9086,
-    );
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 250, 249)), 9086);
     let Ok(mut stream) = TcpStream::connect_timeout(&address, PROBE_TIMEOUT) else {
         return false;
     };
@@ -564,9 +561,7 @@ fn local_jellyfin_available() -> bool {
     let status_ok = headers
         .split(|byte| *byte == b'\n')
         .next()
-        .is_some_and(|line| {
-            line.starts_with(b"HTTP/1.1 200") || line.starts_with(b"HTTP/1.0 200")
-        });
+        .is_some_and(|line| line.starts_with(b"HTTP/1.1 200") || line.starts_with(b"HTTP/1.0 200"));
     status_ok && jfn_jellyfin::is_valid_public_info(&response[header_end + 4..])
 }
 
