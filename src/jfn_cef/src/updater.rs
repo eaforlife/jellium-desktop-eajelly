@@ -63,7 +63,11 @@ pub(crate) fn install(url: &str, digest: &str, expected_size: u64) -> bool {
     let digest = digest.to_ascii_lowercase();
     let _ = std::thread::spawn(move || {
         if let Err(error) = download_and_launch(&url, &digest, expected_size) {
-            tracing::error!(target: "Updater", "Update failed: {error}");
+            jfn_logging::log(
+                jfn_logging::CATEGORY_CEF,
+                jfn_logging::LEVEL_ERROR,
+                &format!("Update failed: {error}"),
+            );
             UPDATE_STARTED.store(false, Ordering::Release);
         }
     });
@@ -76,7 +80,11 @@ fn download_and_launch(
     expected_digest: &str,
     expected_size: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    tracing::info!(target: "Updater", "Downloading update from {url}");
+    jfn_logging::log(
+        jfn_logging::CATEGORY_CEF,
+        jfn_logging::LEVEL_INFO,
+        &format!("Downloading update from {url}"),
+    );
     let mut response = ureq::get(url)
         .header(
             "User-Agent",
@@ -124,7 +132,11 @@ fn download_and_launch(
         return Err("downloaded update is not a Windows executable".into());
     }
 
-    tracing::info!(target: "Updater", "Launching installer: {}", installer.display());
+    jfn_logging::log(
+        jfn_logging::CATEGORY_CEF,
+        jfn_logging::LEVEL_INFO,
+        &format!("Launching installer: {}", installer.display()),
+    );
     std::process::Command::new(&installer)
         .args(["/SP-", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"])
         .spawn()?;
@@ -145,13 +157,13 @@ mod tests {
     fn accepts_only_expected_repository_installer() {
         let suffix = WINDOWS_ASSET_SUFFIX;
         assert!(trusted_installer_url(&format!(
-            "{RELEASE_DOWNLOAD_PREFIX}v3.0.2-eajelly/JelliumDesktop-3.0.2-eajelly%2Babc1234{suffix}"
+            "{RELEASE_DOWNLOAD_PREFIX}v3.0.3-eajelly/JelliumDesktop-3.0.3-eajelly%2Babc1234{suffix}"
         )));
         assert!(!trusted_installer_url(
-            "https://example.com/JelliumDesktop-3.0.2-eajelly-windows-x64-setup.exe"
+            "https://example.com/JelliumDesktop-3.0.3-eajelly-windows-x64-setup.exe"
         ));
         assert!(!trusted_installer_url(&format!(
-            "{RELEASE_DOWNLOAD_PREFIX}v3.0.2-eajelly/not-jellium{suffix}"
+            "{RELEASE_DOWNLOAD_PREFIX}v3.0.3-eajelly/not-jellium{suffix}"
         )));
         assert!(trusted_digest(
             "sha256:0df798de3feefb1efc963dc809f83ad803a9392700fec57406a1a54042791ca6"

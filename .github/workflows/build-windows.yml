@@ -66,7 +66,14 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.msystem }}
-          install: >-
+
+      - name: Install MSYS2 dependencies
+        shell: msys2 {0}
+        run: |
+          # Slow ARM mirrors can trip pacman's curl low-speed cutoff. Keep
+          # downloads alive and retry the transaction after refreshing mirrors.
+          sed -i 's/^#DisableDownloadTimeout/DisableDownloadTimeout/' /etc/pacman.conf
+          packages=(
             ${{ matrix.pkg_prefix }}-cc
             ${{ matrix.pkg_prefix }}-clang
             ${{ matrix.pkg_prefix }}-meson
@@ -79,6 +86,17 @@ jobs:
             ${{ matrix.pkg_prefix }}-shaderc
             ${{ matrix.pkg_prefix }}-spirv-cross
             ${{ matrix.pkg_prefix }}-llvm
+            ${{ matrix.pkg_prefix }}-tools
+          )
+          for attempt in 1 2 3; do
+            if pacman -S --needed --noconfirm "${packages[@]}"; then
+              exit 0
+            fi
+            echo "MSYS2 package installation failed (attempt ${attempt}/3); refreshing databases before retry"
+            pacman -Syy --noconfirm || true
+            sleep $((attempt * 10))
+          done
+          exit 1
 
       - name: Build mpv from source
         if: steps.mpv-cache.outputs.cache-hit != 'true'

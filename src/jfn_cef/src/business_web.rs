@@ -416,7 +416,11 @@ fn handle_message(message: BrowserMessage) -> bool {
             let digest = list_string(a, 1);
             let expected_size = u64::try_from(list_int(a, 2)).unwrap_or_default();
             if !crate::updater::install(&url, &digest, expected_size) {
-                tracing::warn!(target: "Updater", "Rejected update request");
+                jfn_logging::log(
+                    jfn_logging::CATEGORY_CEF,
+                    jfn_logging::LEVEL_WARN,
+                    "Updater rejected an invalid or duplicate update request",
+                );
             }
         }),
         "openConfigDir" => {
