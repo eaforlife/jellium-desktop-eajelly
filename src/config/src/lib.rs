@@ -19,6 +19,9 @@ use std::thread::{self, JoinHandle};
 
 const DEVICE_NAME_MAX: usize = 64;
 const HWDEC_DEFAULT: &str = "no";
+pub const PUBLIC_SERVER_URL: &str = "http://eajelly.xyz";
+pub const LOCAL_SERVER_URL: &str = "http://192.168.250.249:9086";
+static SELECTED_SERVER_URL: OnceLock<String> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug)]
 pub struct JfnWindowGeometry {
@@ -49,7 +52,6 @@ impl Default for JfnWindowGeometry {
 
 #[derive(Clone, Debug)]
 struct SettingsData {
-    server_url: String,
     hwdec: String,
     audio_passthrough: String,
     audio_channels: String,
@@ -67,7 +69,6 @@ struct SettingsData {
 impl Default for SettingsData {
     fn default() -> Self {
         Self {
-            server_url: String::new(),
             hwdec: String::new(),
             audio_passthrough: String::new(),
             audio_channels: String::new(),
@@ -89,9 +90,6 @@ impl Default for SettingsData {
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 struct SettingsFile {
-    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
-    server_url: Option<String>,
-
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     window_width: Option<i32>,
 
@@ -232,9 +230,6 @@ struct CliSettings<'a> {
 
 impl SettingsData {
     fn overlay(&mut self, file: SettingsFile) {
-        if let Some(v) = file.server_url {
-            self.server_url = v;
-        }
         if let Some(v) = file.hwdec {
             self.hwdec = v;
         }
@@ -300,7 +295,6 @@ impl SettingsData {
         let logical = self.window.logical_width > 0 && self.window.logical_height > 0;
         let position = self.window.x >= 0 && self.window.y >= 0;
         SettingsFile {
-            server_url: Some(self.server_url.clone()),
             window_width: size.then_some(self.window.width),
             window_height: size.then_some(self.window.height),
             window_logical_width: logical.then_some(self.window.logical_width),
@@ -518,11 +512,29 @@ macro_rules! bool_accessors {
     };
 }
 
-string_accessors!(server_url, set_server_url, server_url);
 string_accessors!(hwdec, set_hwdec, hwdec);
 string_accessors!(audio_passthrough, set_audio_passthrough, audio_passthrough);
 string_accessors!(audio_channels, set_audio_channels, audio_channels);
 string_accessors!(log_level, set_log_level, log_level);
+
+/// This branded build is permanently bound to the eajelly server. Keeping
+/// the value out of settings also prevents an older settings.json from
+/// restoring the upstream server-selection flow.
+pub fn server_url() -> String {
+    SELECTED_SERVER_URL
+        .get()
+        .map_or(PUBLIC_SERVER_URL, String::as_str)
+        .to_string()
+}
+
+/// Select the server once during app startup, after the LAN probe finishes.
+pub fn select_server_url(value: &'static str) {
+    let _ = SELECTED_SERVER_URL.set(value.to_string());
+}
+
+/// Retained for IPC compatibility with older jellyfin-web code. Server
+/// changes are intentionally ignored in this single-server build.
+pub fn set_server_url(_value: &str) {}
 
 pub fn device_name() -> String {
     state().lock().data.device_name.clone()
@@ -693,15 +705,14 @@ mod tests {
     }
 
     #[test]
-    fn default_settings_write_only_server_url_and_maximized() {
+    fn default_settings_write_only_maximized() {
         let text = serde_json::to_string(&SettingsData::default().to_file()).expect("serializes");
-        assert_eq!(text, r#"{"serverUrl":"","windowMaximized":false}"#);
+        assert_eq!(text, r#"{"windowMaximized":false}"#);
     }
 
     #[test]
     fn every_key_writes_in_schema_order() {
         let data = SettingsData {
-            server_url: "http://host".into(),
             hwdec: "vaapi".into(),
             audio_passthrough: "eac3".into(),
             audio_channels: "stereo".into(),
@@ -728,7 +739,6 @@ mod tests {
         assert_eq!(
             keys(&text),
             [
-                "serverUrl",
                 "windowWidth",
                 "windowHeight",
                 "windowLogicalWidth",
@@ -757,10 +767,10 @@ mod tests {
     #[test]
     fn absent_keys_leave_defaults() {
         let data = loaded(r#"{"serverUrl":"http://host"}"#);
-        assert_eq!(data.server_url, "http://host");
         assert!(data.transparent_titlebar);
         assert!(data.hide_scrollbar);
         assert_eq!(data.window.x, -1);
+        assert_eq!(super::server_url(), super::PUBLIC_SERVER_URL);
     }
 
     #[test]
@@ -768,14 +778,12 @@ mod tests {
         let data = loaded(r#"{"windowWidth":"wide","serverUrl":"http://host","hideScrollbar":7}"#);
         assert_eq!(data.window.width, 0);
         assert!(data.hide_scrollbar);
-        assert_eq!(data.server_url, "http://host");
     }
 
     #[test]
     fn unknown_keys_and_unknown_decorations_are_ignored() {
         let data = loaded(r#"{"nope":1,"windowDecorations":"fancy","serverUrl":"u"}"#);
         assert_eq!(data.window_decorations, None);
-        assert_eq!(data.server_url, "u");
     }
 
     #[test]

@@ -53,7 +53,7 @@ pub fn jfn_about_open() {
         }
     })));
 
-    // setMessageHandler — aboutDismiss / aboutOpenPath.
+    // setMessageHandler — aboutDismiss / external links and paths.
     l.set_message_handler_rust(Some(Box::new(handle_message)));
 
     // setContextMenuBuilder / dispatcher — shared app menu.
@@ -94,6 +94,19 @@ fn handle_message(message: BrowserMessage) -> bool {
             }
             if let Some(p) = platform_ops::ops() {
                 p.open_external_url(&format!("file://{}", path));
+            }
+            true
+        }
+        "aboutOpenUrl" => {
+            let Some(args) = args else { return true };
+            let url = list_string(args, 0);
+            // The About page is an embedded, trusted resource. Still limit
+            // its native URL bridge to the fork and credited upstream repo.
+            if (url.starts_with("https://github.com/eaforlife/jellium-desktop-eajelly")
+                || url == "https://github.com/andrewrabert/jellium-desktop")
+                && let Some(p) = platform_ops::ops()
+            {
+                p.open_external_url(&url);
             }
             true
         }

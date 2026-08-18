@@ -107,6 +107,7 @@ pub fn install(build_dir: &Path, prefix: &Path, _args: &crate::BuildArgs) -> Res
     let ver = version::read()?;
     let mut vars = HashMap::new();
     vars.insert("APP_VERSION_FULL", ver.full.clone());
+    vars.insert("APP_VERSION_NUMERIC", ver.numeric.clone());
     template::configure_file(
         &paths::repo_root()
             .join("resources")

@@ -2,6 +2,8 @@
 //! returns the exit code.
 
 use std::ffi::{CStr, CString, c_char, c_int};
+use std::io::{Read, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::ptr;
 use std::time::Duration;
 
@@ -75,7 +77,6 @@ fn print_version() {
         APP_VERSION_FULL,
         cef_version()
     );
-    use std::io::Write;
     let _ = std::io::stdout().flush();
     jfn_mpv::probe::jfn_mpv_print_version_info();
 }
@@ -527,11 +528,46 @@ fn init_main_browser(
     }
     tracing::info!(target: "Main", "[FLOW] CreateBrowser(main) call returned");
 
-    tracing::info!(target: "Main", "[FLOW] jfn_overlay_init(main_layer)");
-    jfn_cef::business_overlay::jfn_overlay_init(main_layer);
-    tracing::info!(target: "Main", "[FLOW] jfn_overlay_init returned");
-
     (manager_thread, main_layer)
+}
+
+/// A deliberately small HTTP probe for the fixed LAN endpoint. The body must
+/// satisfy Jellyfin's public-info contract, so an unrelated service on the
+/// same port cannot become the app server by accident.
+fn local_jellyfin_available() -> bool {
+    const PROBE_TIMEOUT: Duration = Duration::from_millis(900);
+    let address = SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::new(192, 168, 250, 249)),
+        9086,
+    );
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, PROBE_TIMEOUT) else {
+        return false;
+    };
+    if stream.set_read_timeout(Some(PROBE_TIMEOUT)).is_err()
+        || stream.set_write_timeout(Some(PROBE_TIMEOUT)).is_err()
+    {
+        return false;
+    }
+    let request = b"GET /System/Info/Public HTTP/1.1\r\nHost: 192.168.250.249:9086\r\nAccept: application/json\r\nConnection: close\r\n\r\n";
+    if stream.write_all(request).is_err() {
+        return false;
+    }
+
+    let mut response = Vec::new();
+    if stream.take(1024 * 1024).read_to_end(&mut response).is_err() {
+        return false;
+    }
+    let Some(header_end) = response.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return false;
+    };
+    let headers = &response[..header_end];
+    let status_ok = headers
+        .split(|byte| *byte == b'\n')
+        .next()
+        .is_some_and(|line| {
+            line.starts_with(b"HTTP/1.1 200") || line.starts_with(b"HTTP/1.0 200")
+        });
+    status_ok && jfn_jellyfin::is_valid_public_info(&response[header_end + 4..])
 }
 
 pub fn jfn_app_main() -> c_int {
@@ -615,6 +651,14 @@ async fn notify_running(instance: &Instance) -> c_int {
 }
 
 fn run_app(instance: &Instance, opts: StartupOptions) -> c_int {
+    let selected_server = if local_jellyfin_available() {
+        jfn_config::LOCAL_SERVER_URL
+    } else {
+        jfn_config::PUBLIC_SERVER_URL
+    };
+    jfn_config::select_server_url(selected_server);
+    tracing::info!(target: "Main", "Selected Jellyfin server: {selected_server}");
+
     // Boot geometry resolves before the host prepare so its display probes
     // hit the real server, not the mpv proxy the prepare may install.
     let boot = crate::window_geometry::controller().boot();

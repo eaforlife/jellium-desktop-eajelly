@@ -13,6 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -33,7 +36,7 @@ jobs:
 
       - name: Determine version
         id: version
-        run: echo "version=$(dev/tools/version.sh)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(cargo xtask version)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: |
@@ -89,3 +92,10 @@ jobs:
         with:
           name: macos-${{ matrix.arch }}
           path: dist/JelliumDesktop-*.dmg
+
+      - name: Add DMG to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/JelliumDesktop-*.dmg

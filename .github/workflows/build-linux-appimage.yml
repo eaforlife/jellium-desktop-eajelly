@@ -13,6 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -38,8 +41,22 @@ jobs:
       - name: Build AppImage
         run: ./dev/linux/appimage/build.sh
 
+      - name: Build Debian package
+        run: sh ./dev/linux/deb/build.sh
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: linux-appimage-${{ matrix.arch }}
-          path: dist/JelliumDesktop-*.AppImage
+          path: |
+            dist/JelliumDesktop-*.AppImage
+            dist/JelliumDesktop-*.deb
+
+      - name: Add Linux packages to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/JelliumDesktop-*.AppImage
+            dist/JelliumDesktop-*.deb

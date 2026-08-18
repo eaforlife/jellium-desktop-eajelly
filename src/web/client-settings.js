@@ -331,29 +331,6 @@
             group.appendChild(btn);
         }
 
-        // Reset server button
-        if (jmpInfo.settings.main && jmpInfo.settings.main.userWebClient) {
-            const group = document.createElement('div');
-            group.className = 'verticalSection';
-            form.appendChild(group);
-
-            const sectionHeader = document.createElement('h2');
-            sectionHeader.className = 'sectionTitle';
-            sectionHeader.textContent = 'Server';
-            group.appendChild(sectionHeader);
-
-            const btn = document.createElement('button');
-            btn.className = 'raised button-cancel block emby-button';
-            btn.textContent = 'Reset Saved Server';
-            btn.addEventListener('click', () => {
-                jmpInfo.settings.main.userWebClient = '';
-                if (window.jmpNative && window.jmpNative.saveServerUrl) {
-                    window.jmpNative.saveServerUrl('');
-                }
-                window.location.reload();
-            });
-            group.appendChild(btn);
-        }
     }
 
     window._openClientSettings = showSettingsPage;

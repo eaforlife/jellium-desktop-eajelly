@@ -5,6 +5,9 @@ pub struct Version {
     /// "<raw>[+<short-hash>[-dirty]]" — adds git suffix iff raw is a
     /// pre-release (has a "-suffix").
     pub full: String,
+    /// Numeric `major.minor.patch` form for platform metadata that rejects
+    /// SemVer pre-release/build suffixes (notably macOS bundle versions).
+    pub numeric: String,
 }
 
 /// Short HEAD hash and dirty flag. `(None, false)` when there is no repo.
@@ -22,6 +25,7 @@ pub fn git_info() -> (Option<String>, bool) {
 
 pub fn read() -> Result<Version> {
     let raw = env!("CARGO_PKG_VERSION").to_string();
+    let numeric = raw.split('-').next().unwrap_or(&raw).to_string();
     let full = match (raw.contains('-'), git_info()) {
         (true, (Some(hash), dirty)) => {
             let suffix = if dirty { "-dirty" } else { "" };
@@ -29,7 +33,7 @@ pub fn read() -> Result<Version> {
         }
         _ => raw,
     };
-    Ok(Version { full })
+    Ok(Version { full, numeric })
 }
 
 pub fn cef_package_version() -> Result<String> {

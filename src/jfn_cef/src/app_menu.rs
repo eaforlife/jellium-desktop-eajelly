@@ -12,7 +12,8 @@ use std::os::raw::{c_int, c_void};
 const MENU_ID_USER_FIRST: c_int = sys::cef_menu_id_t::MENU_ID_USER_FIRST as c_int;
 pub const MENU_ID_TOGGLE_FULLSCREEN: c_int = MENU_ID_USER_FIRST;
 pub const MENU_ID_ABOUT: c_int = MENU_ID_USER_FIRST + 1;
-pub const MENU_ID_EXIT: c_int = MENU_ID_USER_FIRST + 2;
+pub const MENU_ID_CHECK_FOR_UPDATES: c_int = MENU_ID_USER_FIRST + 2;
+pub const MENU_ID_EXIT: c_int = MENU_ID_USER_FIRST + 3;
 
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 
@@ -29,6 +30,10 @@ pub fn build_closure() -> Box<crate::client::ContextBuilderFn> {
             MENU_ID_TOGGLE_FULLSCREEN,
             Some(&cef::CefString::from("Toggle Fullscreen")),
         );
+        m.add_item(
+            MENU_ID_CHECK_FOR_UPDATES,
+            Some(&cef::CefString::from("Check for Updates")),
+        );
         m.add_item(MENU_ID_ABOUT, Some(&cef::CefString::from("About")));
         m.add_item(MENU_ID_EXIT, Some(&cef::CefString::from("Exit")));
     })
@@ -42,7 +47,7 @@ pub fn dispatch_closure() -> Box<crate::client::ContextDispatcherFn> {
                 p.toggle_fullscreen();
             }
             true
-        } else if cmd == MENU_ID_ABOUT {
+        } else if cmd == MENU_ID_ABOUT || cmd == MENU_ID_CHECK_FOR_UPDATES {
             crate::business_about::jfn_about_open();
             true
         } else if cmd == MENU_ID_EXIT {

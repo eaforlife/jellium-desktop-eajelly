@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+export APPIMAGE_EXTRACT_AND_RUN=1
+exec /opt/jellium-desktop/JelliumDesktop.AppImage "$@"

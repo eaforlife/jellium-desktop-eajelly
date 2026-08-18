@@ -13,8 +13,8 @@
   </description>
   <launchable type="desktop-id">net.nullsum.JelliumDesktop.desktop</launchable>
   <icon type="stock">net.nullsum.JelliumDesktop</icon>
-  <url type="homepage">https://jellyfin.org</url>
-  <url type="bugtracker">https://github.com/andrewrabert/jellium-desktop/issues</url>
+  <url type="homepage">https://github.com/eaforlife/jellium-desktop-eajelly</url>
+  <url type="bugtracker">https://github.com/eaforlife/jellium-desktop-eajelly/issues</url>
   <url type="help">https://jellyfin.org/docs/</url>
   <developer id="net.nullsum">
     <name>Jellium Contributors</name>

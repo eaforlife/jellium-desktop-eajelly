@@ -89,7 +89,7 @@
             { key: 'advanced', order: 3 }
         ],
         settings: {
-            main: { enableMPV: true, fullscreen: false, userWebClient: '__SERVER_URL__' },
+            main: { enableMPV: true, fullscreen: false, userWebClient: window.location.origin },
             playback: {
                 hwdec: _savedSettings.hwdec || 'auto'
             },
@@ -414,7 +414,7 @@
         supports(command) {
             const features = [
                 'fileinput', 'filedownload', 'displaylanguage', 'htmlaudioautoplay',
-                'htmlvideoautoplay', 'externallinks', 'multiserver',
+                'htmlvideoautoplay', 'externallinks',
                 'fullscreenchange', 'remotevideo', 'displaymode',
                 'exitmenu', 'clientsettings'
             ];

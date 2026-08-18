@@ -55,6 +55,7 @@ pub(crate) enum NativeFunction {
     CheckServerConnectivity,
     CancelServerConnectivity,
     AboutOpenPath,
+    AboutOpenUrl,
     AboutDismiss,
     WindowMinimize,
     WindowToggleMaximize,
@@ -103,6 +104,7 @@ impl NativeFunction {
             "checkServerConnectivity" => Self::CheckServerConnectivity,
             "cancelServerConnectivity" => Self::CancelServerConnectivity,
             "aboutOpenPath" => Self::AboutOpenPath,
+            "aboutOpenUrl" => Self::AboutOpenUrl,
             "aboutDismiss" => Self::AboutDismiss,
             "windowMinimize" => Self::WindowMinimize,
             "windowToggleMaximize" => Self::WindowToggleMaximize,
@@ -152,6 +154,7 @@ impl NativeFunction {
             Self::CheckServerConnectivity => "checkServerConnectivity",
             Self::CancelServerConnectivity => "cancelServerConnectivity",
             Self::AboutOpenPath => "aboutOpenPath",
+            Self::AboutOpenUrl => "aboutOpenUrl",
             Self::AboutDismiss => "aboutDismiss",
             Self::WindowMinimize => "windowMinimize",
             Self::WindowToggleMaximize => "windowToggleMaximize",
@@ -260,8 +263,11 @@ const OVERLAY_FUNCTIONS: &[NativeFunction] = &[
     NativeFunction::CancelServerConnectivity,
 ];
 
-const ABOUT_FUNCTIONS: &[NativeFunction] =
-    &[NativeFunction::AboutOpenPath, NativeFunction::AboutDismiss];
+const ABOUT_FUNCTIONS: &[NativeFunction] = &[
+    NativeFunction::AboutOpenPath,
+    NativeFunction::AboutOpenUrl,
+    NativeFunction::AboutDismiss,
+];
 
 const WINDOW_FUNCTIONS: &[NativeFunction] = &[
     NativeFunction::WindowMinimize,

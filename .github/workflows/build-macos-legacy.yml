@@ -34,7 +34,7 @@ jobs:
 
       - name: Determine version
         id: version
-        run: echo "version=$(dev/tools/version.sh)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(cargo xtask version)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: |

@@ -1,0 +1,8 @@
+Package: jellium-desktop-eajelly
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: eajelly
+Section: video
+Priority: optional
+Description: Jellium Desktop client for the eajelly Jellyfin server
+ A CEF and mpv based Jellyfin desktop client preconfigured for eajelly.

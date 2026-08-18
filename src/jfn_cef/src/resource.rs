@@ -60,6 +60,11 @@ fn lookup(url_path: &str) -> Option<&'static Embedded> {
 
 // Background color from src/color.h:40 — kBgColor{0x101010}.
 const BG_COLOR_HEX: &str = "#101010";
+const RELEASE_API: &str =
+    "https://api.github.com/repos/eaforlife/jellium-desktop-eajelly/releases/latest";
+const RELEASES_URL: &str = "https://github.com/eaforlife/jellium-desktop-eajelly/releases";
+const FORK_URL: &str = "https://github.com/eaforlife/jellium-desktop-eajelly";
+const UPSTREAM_URL: &str = "https://github.com/andrewrabert/jellium-desktop";
 
 fn theme_css() -> Vec<u8> {
     format!(":root{{--bg-color:{BG_COLOR_HEX}}}").into_bytes()
@@ -70,6 +75,10 @@ fn theme_css() -> Vec<u8> {
 struct AboutData<'a> {
     app: &'a str,
     cef: &'a CefVersion,
+    release_api: &'static str,
+    releases_url: &'static str,
+    fork_url: &'static str,
+    upstream_url: &'static str,
     config_dir: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     log_file: Option<String>,
@@ -80,6 +89,10 @@ fn about_js_payload() -> Vec<u8> {
     let data = AboutData {
         app: crate::APP_VERSION_FULL,
         cef: crate::cef_version(),
+        release_api: RELEASE_API,
+        releases_url: RELEASES_URL,
+        fork_url: FORK_URL,
+        upstream_url: UPSTREAM_URL,
         config_dir: abs_path(&jfn_paths::config_dir().to_string_lossy()),
         log_file: (!log_path.is_empty()).then(|| abs_path(&log_path)),
     };

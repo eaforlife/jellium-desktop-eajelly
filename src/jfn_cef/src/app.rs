@@ -611,7 +611,6 @@ fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
             code.replace_range(pos..pos + ph.len(), value);
         }
     }
-    replace_first(&mut code, "__SERVER_URL__", &jfn_config::server_url());
     replace_first(
         &mut code,
         "__SETTINGS_JSON__",
