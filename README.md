@@ -8,17 +8,20 @@ The upstream project and its contributors remain the foundation of this client. 
 
 ## Downloads and installation
 
-Download the installer for your system from the [latest GitHub release](https://github.com/eaforlife/jellium-desktop-eajelly/releases/latest). Release assets are produced automatically for version tags.
+Download the installer for your system from the [latest GitHub release](https://github.com/eaforlife/jellium-desktop-eajelly/releases/latest). Release filenames begin with `JelliumDesktop`; the installed eajelly application has a different name from the old **Jellyfin Desktop** client.
 
 ### Windows
 
-Download the `windows-x64-setup.exe` installer for standard Intel/AMD Windows PCs, or `windows-arm64-setup.exe` for Windows on ARM. Run the installer and launch **Jellium Desktop eajelly** from the Start menu. Portable `.zip` builds are also attached to each release.
+1. Uninstall the old **Jellyfin Desktop** application from **Settings > Apps > Installed apps**. Do not uninstall your Jellyfin server.
+2. Download `JelliumDesktop-<version>-windows-x64-setup.exe` for a standard Intel/AMD PC, or `JelliumDesktop-<version>-windows-arm64-setup.exe` for Windows on ARM.
+3. Run the installer. It will stop and show a warning if the old Jellyfin Desktop client is still installed.
+4. Open **Jellium Desktop eajelly** from the Start menu or desktop shortcut. The new application is listed under this name, not **Jellyfin Desktop**.
 
-If the old **Jellyfin Desktop** app is installed, remove it from **Windows Settings > Apps** first. The Jellium Desktop eajelly installer checks for that legacy app and will not continue until it has been uninstalled.
+Portable `.zip` builds are also attached to each release. Extract the complete archive before running `jellium-desktop.exe`; uninstall the old Jellyfin Desktop client first because portable builds do not run the installer prerequisite check.
 
 ### macOS
 
-Download the DMG matching your Mac (`arm64` for Apple Silicon or `x86_64` for Intel), open it, and drag **Jellium Desktop** into Applications.
+Download `JelliumDesktop-<version>-macos-arm64.dmg` for Apple Silicon or `JelliumDesktop-<version>-macos-x86_64.dmg` for an Intel Mac. Open it and drag **Jellium Desktop** into Applications.
 
 The builds are not Apple-notarized. If macOS quarantines the app, run:
 
@@ -40,6 +43,14 @@ The Debian launcher uses the bundled AppImage in extract-and-run mode, so FUSE i
 chmod +x JelliumDesktop-*.AppImage
 ./JelliumDesktop-*.AppImage
 ```
+
+## Hardware decoding
+
+Hardware decoding defaults to **Auto** and changes made in the client settings apply immediately. On Windows, Auto asks mpv to use a supported decoder such as D3D11VA and falls back to software decoding when the GPU, driver, codec profile, or output path is incompatible.
+
+Jellyfin reporting **Direct Play** only means the server is sending the original file without transcoding; it does not confirm that the client GPU is decoding it. Some GPU **3D** activity is normal because video presentation and window compositing still use the GPU. On multi-GPU systems, Windows may show video decoding on a different adapter or engine graph.
+
+To verify the decoder selected by mpv, play the video and inspect `%LOCALAPPDATA%\jellium-desktop\Logs\jellium-desktop.log` for `hwdec` or `d3d11va`. If Auto falls back to software for an HEVC file, update the GPU driver and test the explicit **D3D11VA** option in client settings.
 
 ## Versions and updates
 

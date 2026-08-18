@@ -1,6 +1,7 @@
 //! Hwdec mode policy: which mpv hardware-decode backends each OS offers.
 
-pub const HWDEC_DEFAULT: &str = "no";
+/// Prefer a supported hardware decoder, while retaining mpv's software fallback.
+pub const HWDEC_DEFAULT: &str = "auto";
 
 #[expect(
     dead_code,
@@ -34,6 +35,11 @@ pub fn is_valid_hwdec(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_prefers_hardware_with_software_fallback() {
+        assert_eq!(HWDEC_DEFAULT, "auto");
+    }
 
     #[test]
     fn defaults_always_valid() {

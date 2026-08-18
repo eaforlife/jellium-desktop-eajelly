@@ -18,7 +18,7 @@ use std::sync::OnceLock;
 use std::thread::{self, JoinHandle};
 
 const DEVICE_NAME_MAX: usize = 64;
-const HWDEC_DEFAULT: &str = "no";
+const HWDEC_DEFAULT: &str = "auto";
 pub const PUBLIC_SERVER_URL: &str = "http://eajelly.xyz";
 pub const LOCAL_SERVER_URL: &str = "http://192.168.250.249:9086";
 static SELECTED_SERVER_URL: OnceLock<String> = OnceLock::new();

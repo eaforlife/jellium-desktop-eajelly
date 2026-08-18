@@ -78,7 +78,7 @@ jobs:
       - name: Build libplacebo from source
         if: steps.deps-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --recursive --branch v7.360.1 https://code.videolan.org/videolan/libplacebo.git /tmp/libplacebo-src
+          git clone --depth 1 --recursive --branch v7.360.1 https://github.com/haasn/libplacebo.git /tmp/libplacebo-src
           cd /tmp/libplacebo-src
           # Fix Python 3.14 compatibility: ElementTree constructor no longer
           # accepts an ElementTree object, only Element. Known upstream issue

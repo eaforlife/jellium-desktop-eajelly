@@ -65,7 +65,17 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
         return;
     };
     match key {
-        "hwdec" => jfn_config::set_hwdec(value),
+        "hwdec" => {
+            jfn_config::set_hwdec(value);
+            if let Some(value) = js_cstr_or_warn("hwdec setting", value) {
+                unsafe {
+                    jfn_mpv::api::jfn_mpv_set_property_string_async(
+                        c"hwdec".as_ptr(),
+                        value.as_ptr(),
+                    );
+                }
+            }
+        }
         "audioPassthrough" => jfn_config::set_audio_passthrough(value),
         "audioExclusive" => jfn_config::set_audio_exclusive(value == "true"),
         "audioChannels" => jfn_config::set_audio_channels(value),
