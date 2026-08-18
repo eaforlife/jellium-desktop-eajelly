@@ -55,7 +55,7 @@ const
   UninstallRegistryPath = 'Software\Microsoft\Windows\CurrentVersion\Uninstall';
   LegacyJellyfinAppId = '{a78bea4a-5bd0-4aa3-bdf3-579b4f58a921}_is1';
 
-function LegacyJellyfinDesktopInRegistry(RootKey: HKEY): Boolean;
+function LegacyJellyfinDesktopInRegistry(RootKey: Integer): Boolean;
 var
   DisplayName: String;
   I: Integer;
