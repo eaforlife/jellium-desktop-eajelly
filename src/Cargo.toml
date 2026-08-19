@@ -30,7 +30,7 @@ members = [
 ]
 
 [workspace.package]
-version = "3.0.3-eajelly"
+version = "3.0.5-eajelly"
 edition = "2024"
 publish = false
 
