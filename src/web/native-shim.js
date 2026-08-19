@@ -126,13 +126,16 @@
                 no: 'Disabled (software)',
                 d3d11va: 'D3D11VA',
                 nvdec: 'NVIDIA NVDEC',
-                'nvdec-copy': 'NVIDIA NVDEC (compatible)',
+                'nvdec-copy': 'NVIDIA NVDEC (copy-back)',
                 vaapi: 'VA-API',
                 videotoolbox: 'VideoToolbox',
                 vulkan: 'Vulkan'
             }[value] || value
         }));
     const _hwdecValues = new Set(_hwdecOptions.map(option => option.value));
+    const _hwdecHelp = _platform.includes('win')
+        ? 'Auto is recommended and normally selects zero-copy D3D11VA. NVDEC copy-back still decodes in hardware but can appear as 3D/copy activity. Changes apply to the next video.'
+        : 'Auto tries hardware decoding first and falls back to software when needed. Changes apply to the next video.';
     function canonicalHwdec(value) {
         let canonical = String(value == null ? 'auto' : value);
         if (_platform.includes('win') && canonical === 'nvdec') canonical = 'nvdec-copy';
@@ -176,7 +179,7 @@
         },
         settingsDescriptions: {
             playback: [
-                { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Auto tries hardware decoding first and falls back to software when needed. Changes apply to the next video.', options: _hwdecOptions }
+                { key: 'hwdec', displayName: 'Hardware Decoding', help: _hwdecHelp, options: _hwdecOptions }
             ],
             audio: [
                 { key: 'audioPassthrough', displayName: 'Audio Passthrough', help: 'Comma-separated list of codecs to pass through to the audio device (e.g. ac3,eac3,dts-hd,truehd). Leave empty to disable.', inputType: 'textarea' },
