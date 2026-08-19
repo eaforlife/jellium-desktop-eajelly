@@ -100,8 +100,11 @@ function Invoke-Msys2 {
     }
 }
 
-# Install build dependencies
-Invoke-Msys2 @"
+# Install build dependencies. CI normally installs these once before invoking
+# this script, but cache misses and local builds still come through here. Keep
+# this path independently resilient to stale/slow MSYS2 mirrors.
+$DependencyCommand = @"
+sed -i 's/^#DisableDownloadTimeout/DisableDownloadTimeout/' /etc/pacman.conf
 pacman -S --needed --noconfirm \
     $PkgPrefix-cc \
     $PkgPrefix-meson \
@@ -115,7 +118,31 @@ pacman -S --needed --noconfirm \
     $PkgPrefix-spirv-cross \
     $PkgPrefix-llvm \
     $PkgPrefix-tools
-"@ -Description "Installing MSYS2 dependencies"
+"@
+
+$DependenciesInstalled = $false
+for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
+    try {
+        Invoke-Msys2 $DependencyCommand -Description "Installing MSYS2 dependencies (attempt $Attempt/3)"
+        $DependenciesInstalled = $true
+        break
+    } catch {
+        if ($Attempt -eq 3) {
+            throw
+        }
+        Write-Warning "MSYS2 dependency installation failed (attempt $Attempt/3); refreshing package databases before retry"
+        try {
+            Invoke-Msys2 "pacman -Syy --noconfirm" -Description "Refreshing MSYS2 package databases"
+        } catch {
+            Write-Warning "MSYS2 database refresh failed; the next install attempt will retry it implicitly"
+        }
+        Start-Sleep -Seconds ($Attempt * 10)
+    }
+}
+
+if (-not $DependenciesInstalled) {
+    throw "Failed to install MSYS2 dependencies after 3 attempts"
+}
 
 # Clean previous build if forcing
 $MesonBuildDir = Join-Path $MpvSourceDir "build"
