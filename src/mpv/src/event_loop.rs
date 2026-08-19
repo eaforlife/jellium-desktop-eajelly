@@ -78,6 +78,22 @@ fn drain(handle: Arc<Handle>, stop: Arc<AtomicBool>, tx: Sender<Event>) {
             Event::None => continue,
             // Log messages go straight to tracing; consumers never see them.
             Event::LogMessage(ref m) => crate::log::forward_to_tracing(m),
+            Event::VideoReconfig => {
+                match handle.get_property_string("hwdec-current") {
+                    Ok(mode) if !mode.is_empty() && mode != "no" => {
+                        tracing::info!(target: "mpv", "Effective video decoder: hardware ({mode})");
+                    }
+                    Ok(_) => {
+                        tracing::warn!(target: "mpv", "Effective video decoder: software");
+                    }
+                    Err(error) => {
+                        tracing::warn!(target: "mpv", "Could not query effective video decoder: {error}");
+                    }
+                }
+                if tx.send(Event::VideoReconfig).is_err() {
+                    return;
+                }
+            }
             Event::Shutdown => {
                 // Forward shutdown so consumers can react, then exit.
                 let _ = tx.send(Event::Shutdown);

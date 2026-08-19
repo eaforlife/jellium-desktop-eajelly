@@ -111,7 +111,7 @@
     // older/native settings payload omits hwdecOptions.
     const _platform = String(navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
     const _fallbackHwdecOptions = _platform.includes('win')
-        ? ['auto', 'no', 'd3d11va', 'nvdec', 'vulkan']
+        ? ['auto', 'no', 'd3d11va', 'nvdec-copy', 'vulkan']
         : _platform.includes('mac')
             ? ['auto', 'no', 'videotoolbox', 'vulkan']
             : ['auto', 'no', 'vaapi', 'nvdec', 'vulkan'];
@@ -126,11 +126,19 @@
                 no: 'Disabled (software)',
                 d3d11va: 'D3D11VA',
                 nvdec: 'NVIDIA NVDEC',
+                'nvdec-copy': 'NVIDIA NVDEC (compatible)',
                 vaapi: 'VA-API',
                 videotoolbox: 'VideoToolbox',
                 vulkan: 'Vulkan'
             }[value] || value
         }));
+    const _hwdecValues = new Set(_hwdecOptions.map(option => option.value));
+    function canonicalHwdec(value) {
+        let canonical = String(value == null ? 'auto' : value);
+        if (_platform.includes('win') && canonical === 'nvdec') canonical = 'nvdec-copy';
+        return _hwdecValues.has(canonical) ? canonical : 'auto';
+    }
+    const _initialHwdec = canonicalHwdec(_savedSettings.hwdec || 'auto');
 
     // window.jmpInfo - settings and device info
     window.jmpInfo = {
@@ -148,7 +156,7 @@
         settings: {
             main: { enableMPV: true, fullscreen: false, userWebClient: window.location.origin },
             playback: {
-                hwdec: _savedSettings.hwdec || 'auto'
+                hwdec: _initialHwdec
             },
             audio: {
                 audioPassthrough: _savedSettings.audioPassthrough || '',
@@ -168,7 +176,7 @@
         },
         settingsDescriptions: {
             playback: [
-                { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Auto tries hardware decoding first and falls back to software when needed. Changes apply immediately.', options: _hwdecOptions }
+                { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Auto tries hardware decoding first and falls back to software when needed. Changes apply to the next video.', options: _hwdecOptions }
             ],
             audio: [
                 { key: 'audioPassthrough', displayName: 'Audio Passthrough', help: 'Comma-separated list of codecs to pass through to the audio device (e.g. ac3,eac3,dts-hd,truehd). Leave empty to disable.', inputType: 'textarea' },

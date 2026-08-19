@@ -203,9 +203,13 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
         remote_debugging_port = p;
     }
 
-    if !jfn_mpv::is_valid_hwdec(&hwdec) {
-        hwdec = mpv_hwdec_default;
+    let canonical_hwdec = jfn_mpv::canonical_hwdec(&hwdec).unwrap_or(jfn_mpv::HWDEC_DEFAULT);
+    if cli.hwdec.is_none() && canonical_hwdec != hwdec {
+        // Keep the UI and the next settings save in sync when migrating a
+        // legacy backend (notably Windows `nvdec`) or repairing bad input.
+        jfn_config::set_hwdec(canonical_hwdec);
     }
+    hwdec = canonical_hwdec.to_string();
 
     if !audio_passthrough.is_empty() {
         audio_passthrough = normalize_passthrough(&audio_passthrough);
@@ -535,7 +539,7 @@ fn init_main_browser(
 /// satisfy Jellyfin's public-info contract, so an unrelated service on the
 /// same port cannot become the app server by accident.
 fn local_jellyfin_available() -> bool {
-    const PROBE_TIMEOUT: Duration = Duration::from_millis(900);
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 250, 249)), 9086);
     let Ok(mut stream) = TcpStream::connect_timeout(&address, PROBE_TIMEOUT) else {
         return false;
@@ -545,7 +549,11 @@ fn local_jellyfin_available() -> bool {
     {
         return false;
     }
-    let request = b"GET /System/Info/Public HTTP/1.1\r\nHost: 192.168.250.249:9086\r\nAccept: application/json\r\nConnection: close\r\n\r\n";
+    // Ask for HTTP/1.0 so the response body is delimited by connection close.
+    // Jellyfin/Kestrel otherwise uses HTTP/1.1 chunked transfer encoding, whose
+    // framing is not JSON and caused this lightweight probe to reject a healthy
+    // LAN server before the browser was created.
+    let request = b"GET /System/Info/Public HTTP/1.0\r\nHost: 192.168.250.249:9086\r\nAccept: application/json\r\nConnection: close\r\n\r\n";
     if stream.write_all(request).is_err() {
         return false;
     }
@@ -567,6 +575,22 @@ fn local_jellyfin_available() -> bool {
 
 pub fn jfn_app_main() -> c_int {
     crate::platform_install::install_early();
+
+    // CEF renderer processes execute and return from jfn_cef_start before the
+    // full clap parse below. Apply path overrides now and mirror explicit CLI
+    // values into the environment inherited by those subprocesses so they
+    // load the same settings.json as the browser process.
+    let (early_config_dir, early_cache_dir) = cli::early_path_overrides();
+    if let Some(path) = &early_config_dir {
+        jfn_paths::set_config_dir_override(path.clone());
+        // SAFETY: this runs before CEF or any application worker threads start.
+        unsafe { std::env::set_var(cli::ENV_CONFIG_DIR, path) };
+    }
+    if let Some(path) = &early_cache_dir {
+        jfn_paths::set_cache_dir_override(path.clone());
+        // SAFETY: this runs before CEF or any application worker threads start.
+        unsafe { std::env::set_var(cli::ENV_CACHE_DIR, path) };
+    }
 
     let rc = jfn_cef::ffi::jfn_cef_start();
     if rc >= 0 {
@@ -594,6 +618,7 @@ pub fn jfn_app_main() -> c_int {
     let opts = resolve_startup_options(&cli);
 
     init_logging(opts.log_file.clone(), &opts.log_level);
+    tracing::info!(target: "Main", "Configured hardware decoding mode: {}", opts.hwdec);
 
     crate::platform_install::install_from_cli(&cli);
 

@@ -46,11 +46,11 @@ chmod +x JelliumDesktop-*.AppImage
 
 ## Hardware decoding
 
-Hardware decoding defaults to **Auto** and changes made in the client settings apply immediately. On Windows, Auto asks mpv to use a supported decoder such as D3D11VA and falls back to software decoding when the GPU, driver, codec profile, or output path is incompatible.
+Hardware decoding defaults to **Auto**, and changes made in the client settings apply to the next video. On Windows, Auto asks mpv to use a supported decoder such as D3D11VA and falls back to software decoding when the GPU, driver, codec profile, or output path is incompatible. The **NVIDIA NVDEC (compatible)** option uses `nvdec-copy`, avoiding CUDA/D3D11 zero-copy interoperability failures that can otherwise cause silent software fallback.
 
 Jellyfin reporting **Direct Play** only means the server is sending the original file without transcoding; it does not confirm that the client GPU is decoding it. Some GPU **3D** activity is normal because video presentation and window compositing still use the GPU. On multi-GPU systems, Windows may show video decoding on a different adapter or engine graph.
 
-To verify the decoder selected by mpv, play the video and inspect `%LOCALAPPDATA%\jellium-desktop\Logs\jellium-desktop.log` for `hwdec` or `d3d11va`. If Auto falls back to software for an HEVC file, update the GPU driver and test the explicit **D3D11VA** option in client settings.
+To verify the decoder selected by mpv, play the video and inspect `%LOCALAPPDATA%\jellium-desktop\Logs\jellium-desktop.log` for `Effective video decoder: hardware (...)` or `Effective video decoder: software`. If Auto falls back to software for an HEVC file, update the GPU driver and test **D3D11VA** or **NVIDIA NVDEC (compatible)** in client settings.
 
 ## Versions and updates
 

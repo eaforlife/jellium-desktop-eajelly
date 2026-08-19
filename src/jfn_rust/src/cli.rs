@@ -4,14 +4,47 @@
 //! actually requested.
 
 use clap::{ArgAction, Parser};
+use std::ffi::{OsStr, OsString};
+use std::path::PathBuf;
 
 const ENV_LOG_LEVEL: &str = "JELLIUM_DESKTOP_LOG_LEVEL";
 const ENV_LOG_FILE: &str = "JELLIUM_DESKTOP_LOG_FILE";
-const ENV_CONFIG_DIR: &str = "JELLIUM_DESKTOP_CONFIG_DIR";
-const ENV_CACHE_DIR: &str = "JELLIUM_DESKTOP_CACHE_DIR";
+pub(crate) const ENV_CONFIG_DIR: &str = "JELLIUM_DESKTOP_CONFIG_DIR";
+pub(crate) const ENV_CACHE_DIR: &str = "JELLIUM_DESKTOP_CACHE_DIR";
 
 #[cfg(test)]
 const ENV_BACKED: &[&str] = &[ENV_LOG_LEVEL, ENV_LOG_FILE, ENV_CONFIG_DIR, ENV_CACHE_DIR];
+
+fn path_overrides_from_args(
+    args: impl IntoIterator<Item = OsString>,
+) -> (Option<PathBuf>, Option<PathBuf>) {
+    let mut config = None;
+    let mut cache = None;
+    let mut args = args.into_iter().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == OsStr::new("--config-dir") {
+            config = args.next().map(PathBuf::from);
+        } else if arg == OsStr::new("--cache-dir") {
+            cache = args.next().map(PathBuf::from);
+        } else if let Some(value) = arg.to_string_lossy().strip_prefix("--config-dir=") {
+            config = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.to_string_lossy().strip_prefix("--cache-dir=") {
+            cache = Some(PathBuf::from(value));
+        }
+    }
+    (config, cache)
+}
+
+/// Read only the path switches before CEF decides whether this process is the
+/// browser or a Chromium subprocess. The full clap parse cannot run yet
+/// because renderer processes also receive Chromium-only switches.
+pub(crate) fn early_path_overrides() -> (Option<PathBuf>, Option<PathBuf>) {
+    let (config, cache) = path_overrides_from_args(std::env::args_os());
+    (
+        config.or_else(|| std::env::var_os(ENV_CONFIG_DIR).map(PathBuf::from)),
+        cache.or_else(|| std::env::var_os(ENV_CACHE_DIR).map(PathBuf::from)),
+    )
+}
 
 /// jellium-desktop — Jellyfin native desktop client.
 ///
@@ -169,6 +202,37 @@ mod tests {
     #[test]
     fn unknown_short_flag() {
         assert_eq!(err_kind(&["app", "-x"]), ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn early_path_parse_tolerates_chromium_switches() {
+        let args = [
+            "app",
+            "--type=renderer",
+            "--config-dir=C:\\test-config",
+            "--cache-dir",
+            "C:\\test-cache",
+            "--cef-unrelated=value",
+        ]
+        .map(OsString::from);
+        let (config, cache) = path_overrides_from_args(args);
+        assert_eq!(config, Some(PathBuf::from(r"C:\test-config")));
+        assert_eq!(cache, Some(PathBuf::from(r"C:\test-cache")));
+    }
+
+    #[test]
+    fn early_path_parse_uses_last_override() {
+        let args = [
+            "app",
+            "--config-dir=first",
+            "--config-dir",
+            "second",
+            "--cache-dir=cache",
+        ]
+        .map(OsString::from);
+        let (config, cache) = path_overrides_from_args(args);
+        assert_eq!(config, Some(PathBuf::from("second")));
+        assert_eq!(cache, Some(PathBuf::from("cache")));
     }
 
     #[test]

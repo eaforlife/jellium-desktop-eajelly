@@ -659,7 +659,8 @@ fn normalize_device_name(raw: &str, platform_default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        SettingsData, SettingsFile, WindowDecorations, default_device_name, normalize_device_name,
+        HWDEC_DEFAULT, SettingsData, SettingsFile, WindowDecorations, default_device_name,
+        normalize_device_name,
     };
 
     const PLATFORM: &str = "platform-host";
@@ -708,6 +709,30 @@ mod tests {
     fn default_settings_write_only_maximized() {
         let text = serde_json::to_string(&SettingsData::default().to_file()).expect("serializes");
         assert_eq!(text, r#"{"windowMaximized":false}"#);
+    }
+
+    #[test]
+    fn hardware_decoder_selection_round_trips() {
+        for mode in ["d3d11va", "nvdec-copy", "no"] {
+            let data = loaded(&format!(r#"{{"hwdec":"{mode}"}}"#));
+            assert_eq!(data.hwdec, mode);
+
+            let text = serde_json::to_string(&data.to_file()).expect("serializes");
+            assert!(text.contains(&format!(r#""hwdec":"{mode}""#)));
+            assert_eq!(loaded(&text).hwdec, mode);
+        }
+    }
+
+    #[test]
+    fn default_hardware_decoder_is_omitted_from_disk() {
+        let data = SettingsData {
+            hwdec: HWDEC_DEFAULT.into(),
+            ..SettingsData::default()
+        };
+        let file = data.to_file();
+
+        assert_eq!(HWDEC_DEFAULT, "auto");
+        assert!(file.hwdec.is_none());
     }
 
     #[test]

@@ -23,13 +23,27 @@ const CURRENT_OS: TargetOs = TargetOs::Macos;
 pub fn hwdec_options() -> &'static [&'static str] {
     match CURRENT_OS {
         TargetOs::Linux => &["auto", "no", "vaapi", "nvdec", "vulkan"],
-        TargetOs::Windows => &["auto", "no", "d3d11va", "nvdec", "vulkan"],
+        TargetOs::Windows => &["auto", "no", "d3d11va", "nvdec-copy", "vulkan"],
         TargetOs::Macos => &["auto", "no", "videotoolbox", "vulkan"],
     }
 }
 
+/// Return the backend spelling accepted by the current platform. Older
+/// Windows builds exposed `nvdec`, whose zero-copy CUDA/D3D11 interop can
+/// silently fall back to software; preserve it as an alias for the reliable
+/// copy-back backend when reading settings or command-line arguments.
+pub fn canonical_hwdec(value: &str) -> Option<&'static str> {
+    if matches!(CURRENT_OS, TargetOs::Windows) && value == "nvdec" {
+        return Some("nvdec-copy");
+    }
+    hwdec_options()
+        .iter()
+        .copied()
+        .find(|option| *option == value)
+}
+
 pub fn is_valid_hwdec(value: &str) -> bool {
-    hwdec_options().contains(&value)
+    canonical_hwdec(value).is_some()
 }
 
 #[cfg(test)]
@@ -52,5 +66,13 @@ mod tests {
     fn rejects_garbage() {
         assert!(!is_valid_hwdec(""));
         assert!(!is_valid_hwdec("garbage"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_migrates_legacy_nvdec_to_copy_backend() {
+        assert_eq!(canonical_hwdec("nvdec"), Some("nvdec-copy"));
+        assert!(hwdec_options().contains(&"nvdec-copy"));
+        assert!(!hwdec_options().contains(&"nvdec"));
     }
 }

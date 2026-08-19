@@ -66,6 +66,7 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
     };
     match key {
         "hwdec" => {
+            let value = jfn_mpv::canonical_hwdec(value).unwrap_or(jfn_mpv::HWDEC_DEFAULT);
             jfn_config::set_hwdec(value);
             if let Some(value) = js_cstr_or_warn("hwdec setting", value) {
                 unsafe {
