@@ -2,8 +2,7 @@
 //! returns the exit code.
 
 use std::ffi::{CStr, CString, c_char, c_int};
-use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::io::Write;
 use std::ptr;
 use std::time::Duration;
 
@@ -53,6 +52,7 @@ pub(crate) const DEFAULT_LOG_FILTER: &str = "info";
 struct BootArgs {
     disable_gpu_compositing: bool,
     remote_debugging_port: c_int,
+    server_override: bool,
 }
 
 fn cs(s: &str) -> CString {
@@ -156,6 +156,7 @@ struct StartupOptions {
     log_file: Option<String>,
     disable_gpu_compositing: bool,
     remote_debugging_port: c_int,
+    server_override: bool,
 }
 
 fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
@@ -224,6 +225,7 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
         log_file,
         disable_gpu_compositing,
         remote_debugging_port,
+        server_override: cli.server_override,
     }
 }
 
@@ -497,6 +499,7 @@ fn boot_mpv_reconcile(mpv_raw: *mut jfn_mpv::sys::mpv_handle) -> f64 {
 fn init_main_browser(
     hz: f64,
     use_shared_textures: bool,
+    server_override: bool,
 ) -> (std::thread::JoinHandle<()>, *mut jfn_cef::JfnCefLayer) {
     // Must run before main browser create: the pre-loaded page fires its
     // initial theme-color IPC at DOMContentLoaded.
@@ -532,45 +535,12 @@ fn init_main_browser(
     }
     tracing::info!(target: "Main", "[FLOW] CreateBrowser(main) call returned");
 
+    if server_override {
+        tracing::info!(target: "Main", "Server override enabled; showing server address field");
+        jfn_cef::business_overlay::jfn_overlay_init(main_layer);
+    }
+
     (manager_thread, main_layer)
-}
-
-/// A deliberately small HTTP probe for the fixed LAN endpoint. The body must
-/// satisfy Jellyfin's public-info contract, so an unrelated service on the
-/// same port cannot become the app server by accident.
-fn local_jellyfin_available() -> bool {
-    const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 250, 249)), 9086);
-    let Ok(mut stream) = TcpStream::connect_timeout(&address, PROBE_TIMEOUT) else {
-        return false;
-    };
-    if stream.set_read_timeout(Some(PROBE_TIMEOUT)).is_err()
-        || stream.set_write_timeout(Some(PROBE_TIMEOUT)).is_err()
-    {
-        return false;
-    }
-    // Ask for HTTP/1.0 so the response body is delimited by connection close.
-    // Jellyfin/Kestrel otherwise uses HTTP/1.1 chunked transfer encoding, whose
-    // framing is not JSON and caused this lightweight probe to reject a healthy
-    // LAN server before the browser was created.
-    let request = b"GET /System/Info/Public HTTP/1.0\r\nHost: 192.168.250.249:9086\r\nAccept: application/json\r\nConnection: close\r\n\r\n";
-    if stream.write_all(request).is_err() {
-        return false;
-    }
-
-    let mut response = Vec::new();
-    if stream.take(1024 * 1024).read_to_end(&mut response).is_err() {
-        return false;
-    }
-    let Some(header_end) = response.windows(4).position(|w| w == b"\r\n\r\n") else {
-        return false;
-    };
-    let headers = &response[..header_end];
-    let status_ok = headers
-        .split(|byte| *byte == b'\n')
-        .next()
-        .is_some_and(|line| line.starts_with(b"HTTP/1.1 200") || line.starts_with(b"HTTP/1.0 200"));
-    status_ok && jfn_jellyfin::is_valid_public_info(&response[header_end + 4..])
 }
 
 pub fn jfn_app_main() -> c_int {
@@ -671,13 +641,7 @@ async fn notify_running(instance: &Instance) -> c_int {
 }
 
 fn run_app(instance: &Instance, opts: StartupOptions) -> c_int {
-    let selected_server = if local_jellyfin_available() {
-        jfn_config::LOCAL_SERVER_URL
-    } else {
-        jfn_config::PUBLIC_SERVER_URL
-    };
-    jfn_config::select_server_url(selected_server);
-    tracing::info!(target: "Main", "Selected Jellyfin server: {selected_server}");
+    tracing::info!(target: "Main", "Jellyfin server: {}", jfn_config::PUBLIC_SERVER_URL);
 
     // Boot geometry resolves before the host prepare so its display probes
     // hit the real server, not the mpv proxy the prepare may install.
@@ -739,6 +703,7 @@ fn run_app(instance: &Instance, opts: StartupOptions) -> c_int {
     let boot_args = BootArgs {
         disable_gpu_compositing: opts.disable_gpu_compositing,
         remote_debugging_port: opts.remote_debugging_port,
+        server_override: opts.server_override,
     };
 
     // CEF's process bring-up needs nothing mpv owns; where the platform
@@ -963,7 +928,7 @@ unsafe fn run_with_cef(ba: &BootArgs, instance: &Instance) -> c_int {
 
     let hz = boot_mpv_reconcile(mpv_raw);
 
-    let (manager_thread, main_layer) = init_main_browser(hz, shared_textures());
+    let (manager_thread, main_layer) = init_main_browser(hz, shared_textures(), ba.server_override);
 
     if !start_playback_coordination(instance) {
         return 1;

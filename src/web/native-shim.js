@@ -455,6 +455,9 @@
         openClientSettings() {
             window._openClientSettings();
         },
+        openAbout() {
+            window.jmpNative.openAbout();
+        },
         getPlugins() {
             return plugins;
         }
@@ -553,6 +556,54 @@
 
         style.textContent = css;
         document.head.appendChild(style);
+
+        // Jellyfin already adds Client Settings and Exit to its account/cog
+        // menu through the NativeShell feature flags below. Use that stable
+        // Client Settings entry as the anchor for the remaining native app
+        // actions that are also available from the right-click context menu.
+        const addAppActionsToCogMenu = (root) => {
+            if (!(root instanceof Element) && root !== document) return;
+            const candidates = [];
+            if (root instanceof Element && root.matches('button, a')) candidates.push(root);
+            if (root.querySelectorAll) candidates.push(...root.querySelectorAll('button, a'));
+            for (const candidate of candidates) {
+                if (candidate.dataset.jelliumAction) continue;
+                const label = candidate.textContent.trim().toLowerCase();
+                const isClientSettings = candidate.classList.contains('btnClientSettings')
+                    || label === 'client settings';
+                if (!isClientSettings) continue;
+
+                const menu = candidate.parentElement;
+                if (!menu || menu.querySelector('[data-jellium-action]')) continue;
+                const actions = [
+                    ['fullscreen', 'Toggle Fullscreen', () => window.jmpNative.toggleFullscreen()],
+                    ['updates', 'Check for Updates', () => window.jmpNative.openAbout()],
+                    ['about', 'About Jellium Desktop', () => window.jmpNative.openAbout()]
+                ];
+                let insertionPoint = candidate;
+                for (const [id, text, handler] of actions) {
+                    const item = candidate.cloneNode(false);
+                    item.removeAttribute('id');
+                    item.dataset.jelliumAction = id;
+                    item.textContent = text;
+                    item.addEventListener('click', (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        handler();
+                    });
+                    insertionPoint.after(item);
+                    insertionPoint = item;
+                }
+            }
+        };
+        addAppActionsToCogMenu(document);
+        new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                for (const node of mutation.addedNodes) {
+                    if (node instanceof Element) addAppActionsToCogMenu(node);
+                }
+            }
+        }).observe(document.body, { childList: true, subtree: true });
 
         // Sync titlebar color with theme-color meta tag
         const meta = document.querySelector('meta[name="theme-color"]');

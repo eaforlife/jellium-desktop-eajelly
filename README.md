@@ -2,7 +2,7 @@
 
 Jellium Desktop - EAJelly is a preconfigured fork of [Jellium Desktop](https://github.com/andrewrabert/jellium-desktop), the unofficial [Jellyfin](https://jellyfin.org) desktop client built with [CEF](https://github.com/chromiumembedded/cef) and [mpv](https://mpv.io/).
 
-This fork opens the eajelly service directly and never asks users to enter a server address. At startup it briefly checks the private LAN server. If that endpoint returns valid Jellyfin server information, the app uses it; otherwise it automatically uses `http://eajelly.xyz`. Users proceed directly to the normal username and password screen.
+This fork opens `http://eajelly.xyz` directly and normally proceeds to the username and password screen without asking for a server address. Advanced users can launch the app with `--server-override` to show a server-address field before login for that session.
 
 The upstream project and its contributors remain the foundation of this client. Fork-specific source and issue tracking are available in the [eajelly repository](https://github.com/eaforlife/jellium-desktop-eajelly).
 
@@ -54,7 +54,7 @@ To verify the decoder selected by mpv, play the video and inspect `%LOCALAPPDATA
 
 ## Versions and updates
 
-The eajelly release line starts at `3.0.0-eajelly`. On Windows, the app checks GitHub Releases shortly after launch. When an update is available, choose **Download and install** to download the architecture-matched installer; the app closes and opens the installer when it is ready. You can also right-click and choose **Check for Updates** or open **About**. macOS and Linux currently use the manual release-page flow.
+The eajelly release line starts at `3.0.0-eajelly`. On Windows, the app checks GitHub Releases shortly after launch. When an update is available, choose **Download and install** to download the architecture-matched installer; the app closes and opens the installer when it is ready. The cogwheel/account menu and right-click context menu also provide **Check for Updates** and **About**. macOS and Linux currently use the manual release-page flow.
 
 The GitHub Actions workflows build Windows installers and portable archives, macOS DMGs, Linux AppImages, Debian packages, and a Flatpak bundle. Tag builds attach their outputs to the GitHub release automatically.
 

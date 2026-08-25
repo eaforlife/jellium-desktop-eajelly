@@ -103,6 +103,10 @@ pub struct Cli {
     #[arg(long, action = ArgAction::SetTrue)]
     pub disable_gpu_compositing: bool,
 
+    /// Show the server address field before login.
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub server_override: bool,
+
     #[cfg(target_os = "linux")]
     #[command(flatten)]
     pub linux: jfn_linux_util::cli::LinuxArgs,
@@ -252,13 +256,20 @@ mod tests {
         let a = ok(&["app"]);
         assert!(!a.audio_exclusive);
         assert!(!a.disable_gpu_compositing);
+        assert!(!a.server_override);
     }
 
     #[test]
     fn bool_flags_set() {
-        let a = ok(&["app", "--audio-exclusive", "--disable-gpu-compositing"]);
+        let a = ok(&[
+            "app",
+            "--audio-exclusive",
+            "--disable-gpu-compositing",
+            "--server-override",
+        ]);
         assert!(a.audio_exclusive);
         assert!(a.disable_gpu_compositing);
+        assert!(a.server_override);
     }
 
     #[test]
@@ -275,6 +286,7 @@ mod tests {
         assert!(a.cache_dir.is_none());
         assert!(!a.audio_exclusive);
         assert!(!a.disable_gpu_compositing);
+        assert!(!a.server_override);
         assert!(a.remote_debug_port.is_none());
         #[cfg(target_os = "linux")]
         {

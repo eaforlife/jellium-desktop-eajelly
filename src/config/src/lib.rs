@@ -20,8 +20,6 @@ use std::thread::{self, JoinHandle};
 const DEVICE_NAME_MAX: usize = 64;
 const HWDEC_DEFAULT: &str = "auto";
 pub const PUBLIC_SERVER_URL: &str = "http://eajelly.xyz";
-pub const LOCAL_SERVER_URL: &str = "http://192.168.250.249:9086";
-static SELECTED_SERVER_URL: OnceLock<String> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug)]
 pub struct JfnWindowGeometry {
@@ -517,19 +515,11 @@ string_accessors!(audio_passthrough, set_audio_passthrough, audio_passthrough);
 string_accessors!(audio_channels, set_audio_channels, audio_channels);
 string_accessors!(log_level, set_log_level, log_level);
 
-/// This branded build is permanently bound to the eajelly server. Keeping
-/// the value out of settings also prevents an older settings.json from
-/// restoring the upstream server-selection flow.
+/// Normal launches are permanently bound to the eajelly server. The optional
+/// server-override overlay navigates the browser directly for that session,
+/// so an older settings.json can never change the normal startup target.
 pub fn server_url() -> String {
-    SELECTED_SERVER_URL
-        .get()
-        .map_or(PUBLIC_SERVER_URL, String::as_str)
-        .to_string()
-}
-
-/// Select the server once during app startup, after the LAN probe finishes.
-pub fn select_server_url(value: &'static str) {
-    let _ = SELECTED_SERVER_URL.set(value.to_string());
+    PUBLIC_SERVER_URL.to_string()
 }
 
 /// Retained for IPC compatibility with older jellyfin-web code. Server

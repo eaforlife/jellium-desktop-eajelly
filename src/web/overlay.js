@@ -218,35 +218,20 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
-// Auto-connect on load
+// This overlay is created only for --server-override. Always expose the
+// address field instead of auto-connecting, while pre-filling the normal
+// eajelly target as a convenient default.
 (async () => {
-    console.log('Auto-connect: starting');
-
     const savedServer = await savedServerUrlReady;
-    console.debug('Auto-connect: savedServer =', savedServer);
+    const title = document.getElementById('title');
+    const address = document.getElementById('address');
+    const button = document.getElementById('connect-button');
 
-    if (savedServer) {
-        console.debug('Auto-connect: checking saved server', savedServer);
-
-        // main.cpp pre-loads the saved URL into the main browser in parallel
-        // with overlay startup, so don't issue a redundant navigateMain.
-        mainLoaded = true;
-
-        const address = document.getElementById('address');
-
-        // Set address value for potential display later
-        address.value = savedServer;
-
-        startConnecting();
-    } else {
-        const title = document.getElementById('title');
-        const address = document.getElementById('address');
-        const button = document.getElementById('connect-button');
-
-        title.style.visibility = 'visible';
-        address.style.visibility = 'visible';
-        button.style.visibility = 'visible';
-        address.focus();
-        updateButtonState();
-    }
+    address.value = savedServer || '';
+    title.style.visibility = 'visible';
+    address.style.visibility = 'visible';
+    button.style.visibility = 'visible';
+    address.focus();
+    address.select();
+    updateButtonState();
 })();

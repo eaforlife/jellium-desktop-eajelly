@@ -364,6 +364,10 @@ fn handle_message(message: BrowserMessage) -> bool {
             jfn_platform_abi::get().toggle_fullscreen();
             true
         }
+        "openAbout" => {
+            crate::business_about::jfn_about_open();
+            true
+        }
         "saveServerUrl" => with_args(args, |a| {
             jfn_config::set_server_url(&list_string(a, 0));
             jfn_config::settings_save_async();
