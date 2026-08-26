@@ -23,6 +23,7 @@ pub mod media_sink;
 pub mod menu;
 pub mod mpv_host;
 pub mod osr_popup;
+pub mod picture_in_picture;
 #[cfg_attr(unix, path = "process_unix.rs")]
 #[cfg_attr(not(unix), path = "process_other.rs")]
 mod process;
@@ -484,6 +485,16 @@ pub trait Platform: Send + Sync {
     // Fullscreen
     fn set_fullscreen(&self, _v: bool) {}
     fn toggle_fullscreen(&self) {}
+
+    // Picture-in-picture. Backends opt in only when they can provide a
+    // resizable, always-on-top native window with deterministic sizing.
+    fn picture_in_picture_supported(&self) -> bool {
+        false
+    }
+    fn set_picture_in_picture(&self, _enabled: bool, _aspect_ratio: f64) {}
+
+    /// Restore any transient window mode before normal geometry is persisted.
+    fn prepare_window_geometry_persist(&self) {}
 
     // Window controls for client-side decorations. Default no-ops cover
     // backends without CSD (X11 WMs / macOS / Windows draw their own).

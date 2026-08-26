@@ -103,7 +103,7 @@ impl Listener {
     {
         match Self::make(name, false) {
             Ok(listener) => Self::spawn(listener, handle),
-            Err(e) if e.kind() == ErrorKind::AddrInUse => match Self::probe(name).await {
+            Err(e) if bind_may_be_occupied(&e) => match Self::probe(name).await {
                 Probe::AlreadyRunning => Start::AlreadyRunning,
                 Probe::Stale => match Self::make(name, true) {
                     Ok(listener) => Self::spawn(listener, handle),
@@ -155,6 +155,14 @@ impl Listener {
             let _ = accept.await;
         }
     }
+}
+
+fn bind_may_be_occupied(error: &io::Error) -> bool {
+    error.kind() == ErrorKind::AddrInUse
+        // Windows named-pipe/local-socket backends report an occupied endpoint
+        // as ERROR_ACCESS_DENIED. The probe below still distinguishes a live
+        // listener from an actually inaccessible path.
+        || cfg!(windows) && error.kind() == ErrorKind::PermissionDenied
 }
 
 impl Drop for Listener {

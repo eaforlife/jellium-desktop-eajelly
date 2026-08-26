@@ -34,7 +34,7 @@ mod window;
 use crate::input::jfn_input_windows_set_cursor;
 use crate::platform::{
     win_clamp_window_geometry, win_cleanup, win_early_init, win_get_display_scale, win_get_scale,
-    win_init, win_set_fullscreen, win_toggle_fullscreen,
+    win_init, win_set_fullscreen, win_set_picture_in_picture, win_toggle_fullscreen,
 };
 
 fn win_pump() {}
@@ -231,6 +231,18 @@ impl Platform for WindowsPlatform {
 
     fn toggle_fullscreen(&self) {
         win_toggle_fullscreen();
+    }
+
+    fn picture_in_picture_supported(&self) -> bool {
+        true
+    }
+
+    fn set_picture_in_picture(&self, enabled: bool, aspect_ratio: f64) {
+        win_set_picture_in_picture(enabled, aspect_ratio);
+    }
+
+    fn prepare_window_geometry_persist(&self) {
+        win_set_picture_in_picture(false, 1.0);
     }
 
     fn get_scale(&self) -> f32 {

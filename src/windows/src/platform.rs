@@ -12,13 +12,20 @@ use parking_lot::Mutex;
 use std::ffi::{c_int, c_void};
 use std::thread::JoinHandle;
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::UI::HiDpi::GetDpiForSystem;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+};
+use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CWPRETSTRUCT, CallNextHookEx, GWL_STYLE, GetWindowLongPtrW, GetWindowThreadProcessId, HHOOK,
-    IsZoomed, SIZE_MINIMIZED, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    SetWindowsHookExW, SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROCRET, WM_CLOSE,
-    WM_DPICHANGED, WM_MOVE, WM_SIZE, WM_STYLECHANGED, WS_CAPTION, WS_THICKFRAME,
+    CWPRETSTRUCT, CallNextHookEx, GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, GetWindowPlacement,
+    GetWindowRect, GetWindowThreadProcessId, HHOOK, HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed,
+    MINMAXINFO, SET_WINDOW_POS_FLAGS, SIZE_MAXIMIZED, SIZE_MINIMIZED, SPI_GETWORKAREA, SW_RESTORE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    SetWindowPlacement, SetWindowPos, SetWindowsHookExW, ShowWindow, SystemParametersInfoW,
+    UnhookWindowsHookEx, WH_CALLWNDPROCRET, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT,
+    WM_CLOSE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOVE, WM_SIZE, WM_STYLECHANGED, WS_CAPTION,
+    WS_THICKFRAME,
 };
 
 use jfn_mpv::api::{
@@ -27,6 +34,10 @@ use jfn_mpv::api::{
 };
 use jfn_mpv::boot::jfn_mpv_handle_get;
 use jfn_platform_abi::geometry::{Bounds, WindowGeometry, clamp_to_bounds};
+use jfn_platform_abi::picture_in_picture::{
+    DEFAULT_SCREEN_FRACTION, MINIMUM_SCREEN_FRACTION, fit_display_fraction,
+};
+use jfn_platform_abi::{PhysicalSize, picture_in_picture};
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 
 use crate::input::{
@@ -40,6 +51,15 @@ struct WinState {
     restore_maximized_on_unfullscreen: bool,
     wndproc_hook_raw: usize,
     input_thread: Option<JoinHandle<()>>,
+    picture_in_picture: Option<PictureInPictureState>,
+    pending_picture_in_picture_aspect: Option<f64>,
+}
+
+#[derive(Clone, Copy)]
+struct PictureInPictureState {
+    restore: WINDOWPLACEMENT,
+    minimum_outer: POINT,
+    work_area: RECT,
 }
 
 impl WinState {
@@ -50,6 +70,8 @@ impl WinState {
             restore_maximized_on_unfullscreen: false,
             wndproc_hook_raw: 0,
             input_thread: None,
+            picture_in_picture: None,
+            pending_picture_in_picture_aspect: None,
         }
     }
 }
@@ -125,6 +147,7 @@ pub(crate) fn win_set_fullscreen(fullscreen: bool) {
     };
 
     if fullscreen {
+        win_set_picture_in_picture(false, 1.0);
         STATE.lock().restore_maximized_on_unfullscreen = unsafe { IsZoomed(hwnd) }.as_bool();
         jfn_mpv_set_window_minimized(false);
         jfn_mpv_set_fullscreen(true);
@@ -148,6 +171,7 @@ pub(crate) fn win_toggle_fullscreen() {
     };
 
     if !win_is_fullscreen() {
+        win_set_picture_in_picture(false, 1.0);
         STATE.lock().restore_maximized_on_unfullscreen = unsafe { IsZoomed(hwnd) }.as_bool();
         jfn_mpv_set_window_minimized(false);
         jfn_mpv_toggle_fullscreen();
@@ -159,6 +183,154 @@ pub(crate) fn win_toggle_fullscreen() {
     jfn_mpv_toggle_fullscreen();
     if should_restore_maximized {
         jfn_mpv_set_window_maximized(true);
+    }
+}
+
+fn monitor_work_area(hwnd: HWND) -> Option<RECT> {
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe { GetMonitorInfoW(monitor, &mut info) }
+        .as_bool()
+        .then_some(info.rcWork)
+}
+
+fn outer_size_for_client(hwnd: HWND, client: PhysicalSize) -> Option<PhysicalSize> {
+    let style = WINDOW_STYLE(unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32);
+    let ex_style = WINDOW_EX_STYLE(unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32);
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: client.w,
+        bottom: client.h,
+    };
+    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+    unsafe { AdjustWindowRectExForDpi(&mut rect, style, false, ex_style, dpi) }.ok()?;
+    Some(PhysicalSize {
+        w: rect.right - rect.left,
+        h: rect.bottom - rect.top,
+    })
+}
+
+fn enter_picture_in_picture(hwnd: HWND, aspect_ratio: f64) {
+    if STATE.lock().picture_in_picture.is_some() {
+        return;
+    }
+    let Some(work) = monitor_work_area(hwnd) else {
+        return;
+    };
+    let display = PhysicalSize {
+        w: work.right - work.left,
+        h: work.bottom - work.top,
+    };
+    let Some(default_outer) = outer_size_for_client(
+        hwnd,
+        fit_display_fraction(display, aspect_ratio, DEFAULT_SCREEN_FRACTION),
+    ) else {
+        return;
+    };
+    let Some(minimum_outer) = outer_size_for_client(
+        hwnd,
+        fit_display_fraction(display, aspect_ratio, MINIMUM_SCREEN_FRACTION),
+    ) else {
+        return;
+    };
+    let mut restore = WINDOWPLACEMENT {
+        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GetWindowPlacement(hwnd, &mut restore) }.is_err() {
+        return;
+    }
+
+    // PiP is a floating window. Preserve the placement first, then leave any
+    // maximized state before sizing it into the working area's lower-right.
+    let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
+    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+    let margin = ((16 * dpi) / 96) as i32;
+    let x = work.right - default_outer.w - margin;
+    let y = work.bottom - default_outer.h - margin;
+    STATE.lock().picture_in_picture = Some(PictureInPictureState {
+        restore,
+        minimum_outer: POINT {
+            x: minimum_outer.w,
+            y: minimum_outer.h,
+        },
+        work_area: work,
+    });
+    if unsafe {
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            x,
+            y,
+            default_outer.w,
+            default_outer.h,
+            SWP_NOACTIVATE,
+        )
+    }
+    .is_err()
+    {
+        STATE.lock().picture_in_picture = None;
+        let _ = unsafe { SetWindowPlacement(hwnd, &restore) };
+        return;
+    }
+    picture_in_picture::notify(true);
+}
+
+fn leave_picture_in_picture(hwnd: HWND, restore_placement: bool) {
+    let state = STATE.lock().picture_in_picture.take();
+    let Some(state) = state else {
+        return;
+    };
+    let flags = SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0);
+    let _ = unsafe { SetWindowPos(hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, flags) };
+    if restore_placement {
+        let _ = unsafe { SetWindowPlacement(hwnd, &state.restore) };
+        crate::window::sample();
+    }
+    picture_in_picture::notify(false);
+}
+
+pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
+    let Some(hwnd) = win_hwnd() else {
+        return;
+    };
+    if !enabled {
+        STATE.lock().pending_picture_in_picture_aspect = None;
+        leave_picture_in_picture(hwnd, true);
+        return;
+    }
+    if STATE.lock().picture_in_picture.is_some() {
+        return;
+    }
+    if win_is_fullscreen() {
+        STATE.lock().pending_picture_in_picture_aspect = Some(aspect_ratio);
+        win_set_fullscreen(false);
+        return;
+    }
+    enter_picture_in_picture(hwnd, aspect_ratio);
+}
+
+fn cancel_picture_in_picture_for_window_action(hwnd: HWND, size_kind: usize) {
+    let should_cancel = {
+        let state = STATE.lock();
+        let Some(pip) = state.picture_in_picture else {
+            return;
+        };
+        if size_kind == SIZE_MAXIMIZED as usize {
+            true
+        } else {
+            let mut rect = RECT::default();
+            unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok()
+                && rect.right - rect.left >= pip.work_area.right - pip.work_area.left
+                && rect.bottom - rect.top >= pip.work_area.bottom - pip.work_area.top
+        }
+    };
+    if should_cancel {
+        leave_picture_in_picture(hwnd, false);
     }
 }
 
@@ -181,12 +353,27 @@ unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM
                     if restored {
                         jfn_playback::lifecycle::jfn_lifecycle_set_visible(true);
                     }
+                    cancel_picture_in_picture_for_window_action(msg.hwnd, msg.wParam.0);
                 }
                 WM_MOVE => {
                     crate::window::sample();
                 }
+                WM_GETMINMAXINFO => {
+                    if let Some(pip) = STATE.lock().picture_in_picture {
+                        let minmax = unsafe { &mut *(msg.lParam.0 as *mut MINMAXINFO) };
+                        minmax.ptMinTrackSize = pip.minimum_outer;
+                    }
+                }
                 WM_DPICHANGED | WM_STYLECHANGED => {
                     crate::window::publish_deferred();
+                    let pending_aspect = if msg.message == WM_STYLECHANGED && !win_is_fullscreen() {
+                        STATE.lock().pending_picture_in_picture_aspect.take()
+                    } else {
+                        None
+                    };
+                    if let Some(aspect) = pending_aspect {
+                        enter_picture_in_picture(msg.hwnd, aspect);
+                    }
                 }
                 WM_CLOSE => jfn_shutdown_initiate(),
                 _ => {}
@@ -223,7 +410,6 @@ pub(crate) fn win_init(_mpv: *mut c_void) -> bool {
             return false;
         }
     }
-
     let mpv_hwnd_for_thread = hwnd_raw;
     let join = std::thread::spawn(move || {
         jfn_input_windows_run_input_thread(mpv_hwnd_for_thread as *mut c_void);
@@ -236,6 +422,7 @@ pub(crate) fn win_init(_mpv: *mut c_void) -> bool {
 }
 
 pub(crate) fn win_cleanup() {
+    win_set_picture_in_picture(false, 1.0);
     jfn_input_windows_stop_input_thread();
     let join = STATE.lock().input_thread.take();
     if let Some(j) = join {

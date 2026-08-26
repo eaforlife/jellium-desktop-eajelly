@@ -12,9 +12,10 @@
 use cef::{ImplListValue, ListValue};
 use parking_lot::Mutex;
 use serde_json::Value;
+use std::ffi::CString;
 use std::ffi::c_char;
 use std::os::raw::c_void;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::browsers::{jfn_browsers_active, jfn_browsers_set_active};
 use crate::business_common::{apply_setting_value, js_cstr_or_warn, reject_double_init};
@@ -73,10 +74,26 @@ pub fn jfn_web_init(layer: *mut JfnCefLayer) {
 
     let inner = unsafe { jfn_cef_layer_inner(layer) };
     install_handlers(layer, Arc::clone(&inner));
+    ensure_picture_in_picture_subscription();
 
     *INSTANCE.lock() = Some(WebState {
         layer: inner,
         was_fullscreen_before_osd: false,
+    });
+}
+
+fn ensure_picture_in_picture_subscription() {
+    static SUBSCRIBED: OnceLock<()> = OnceLock::new();
+    SUBSCRIBED.get_or_init(|| {
+        jfn_platform_abi::picture_in_picture::subscribe(|active| {
+            let js = format!(
+                "window._nativePictureInPictureChanged({})",
+                if active { "true" } else { "false" }
+            );
+            if let Ok(js) = CString::new(js) {
+                unsafe { jfn_web_exec_js(js.as_ptr()) };
+            }
+        });
     });
 }
 
@@ -285,6 +302,7 @@ fn handle_message(message: BrowserMessage) -> bool {
     match message.name() {
         "playerLoad" => with_args(args, handle_player_load),
         "playerStop" => {
+            jfn_platform_abi::get().set_picture_in_picture(false, 1.0);
             jfn_mpv_stop();
             true
         }
@@ -364,6 +382,15 @@ fn handle_message(message: BrowserMessage) -> bool {
             jfn_platform_abi::get().toggle_fullscreen();
             true
         }
+        "setPictureInPicture" => with_args(args, |a| {
+            let enabled = a.bool(0) != 0;
+            let aspect_ratio = if a.size() > 1 {
+                a.double(1)
+            } else {
+                16.0 / 9.0
+            };
+            jfn_platform_abi::get().set_picture_in_picture(enabled, aspect_ratio);
+        }),
         "openAbout" => {
             crate::business_about::jfn_about_open();
             true

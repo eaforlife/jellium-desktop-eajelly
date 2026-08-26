@@ -415,6 +415,7 @@ fn start_playback_coordination(instance: &Instance) -> bool {
 fn shutdown_runtime(manager_thread: std::thread::JoinHandle<()>) {
     // Persist before the joins below: they can block on a VO-teardown
     // roundtrip, and a hang there must not cost the window geometry.
+    plat().prepare_window_geometry_persist();
     crate::window_geometry::controller().persist();
     jfn_config::settings_save();
 

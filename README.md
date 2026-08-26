@@ -52,6 +52,12 @@ Jellyfin reporting **Direct Play** only means the server is sending the original
 
 To verify the decoder selected by mpv, play the video and inspect `%LOCALAPPDATA%\jellium-desktop\Logs\jellium-desktop.log` for `Effective video decoder: hardware (...)` or `Effective video decoder: software`. If Auto falls back to software for an HEVC file, update the GPU driver and test **D3D11VA** or **NVIDIA NVDEC (copy-back)** in client settings.
 
+## Picture-in-picture
+
+During video playback on Windows, the PiP control beside fullscreen turns the app into a resizable, always-on-top video window. It opens at 25% of the current display while preserving the video's aspect ratio, and resizing is limited to a 15% minimum. Maximizing the window or resizing it to the display size exits PiP automatically. Playback completion also exits PiP before Jellyfin returns to the item page.
+
+PiP continues to use MPV's video and subtitle renderer rather than Chromium's HTML-video PiP. Embedded subtitle formats such as MP4 `mov_text`, ASS/SSA, PGS, and external subtitle tracks remain visible.
+
 ## Versions and updates
 
 The eajelly release line starts at `3.0.0-eajelly`. On Windows, the app checks GitHub Releases shortly after launch. When an update is available, choose **Download and install** to download the architecture-matched installer; the app closes and opens the installer when it is ready. The cogwheel/account menu and right-click context menu also provide **Check for Updates** and **About**. macOS and Linux currently use the manual release-page flow.

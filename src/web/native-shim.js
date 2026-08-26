@@ -417,6 +417,14 @@
             player.events.trigger(player, 'fullscreenchange');
         }
     };
+    window._isPictureInPicture = false;
+    window._nativePictureInPictureChanged = function(active) {
+        window._isPictureInPicture = !!active;
+        const player = window._mpvVideoPlayerInstance;
+        if (player && player.events) {
+            player.events.trigger(player, 'pictureinpicturechange');
+        }
+    };
     window._nativeUpdatePosition = function(ms) {
         playerState.position = ms;
         window.api.player.positionUpdate(ms);
@@ -576,16 +584,29 @@
                 const menu = candidate.parentElement;
                 if (!menu || menu.querySelector('[data-jellium-action]')) continue;
                 const actions = [
-                    ['fullscreen', 'Toggle Fullscreen', () => window.jmpNative.toggleFullscreen()],
-                    ['updates', 'Check for Updates', () => window.jmpNative.openAbout()],
-                    ['about', 'About Jellium Desktop', () => window.jmpNative.openAbout()]
+                    ['fullscreen', 'Toggle Fullscreen', 'fullscreen', () => window.jmpNative.toggleFullscreen()],
+                    ['updates', 'Check for Updates', 'system_update_alt', () => window.jmpNative.openAbout()],
+                    ['about', 'About Jellium Desktop', 'info', () => window.jmpNative.openAbout()]
                 ];
                 let insertionPoint = candidate;
-                for (const [id, text, handler] of actions) {
-                    const item = candidate.cloneNode(false);
+                for (const [id, text, icon, handler] of actions) {
+                    // Keep Jellyfin's complete list-item structure so padding,
+                    // focus treatment, typography and icon columns stay aligned.
+                    const item = candidate.cloneNode(true);
+                    item.querySelectorAll('[id]').forEach((node) => node.removeAttribute('id'));
                     item.removeAttribute('id');
                     item.dataset.jelliumAction = id;
-                    item.textContent = text;
+                    item.setAttribute('aria-label', text);
+                    const iconNode = item.querySelector('.listItemIcon, .material-icons, .material-symbols-rounded, .material-symbols-outlined');
+                    const textNode = item.querySelector('.listItemBodyText, .actionSheetItemText, [class*="BodyText"]');
+                    if (iconNode) iconNode.textContent = icon;
+                    if (textNode) {
+                        textNode.textContent = text;
+                    } else {
+                        // Older Jellyfin menus put the label directly in the
+                        // button. Rebuild only that fallback shape.
+                        item.textContent = text;
+                    }
                     item.addEventListener('click', (event) => {
                         event.preventDefault();
                         event.stopPropagation();

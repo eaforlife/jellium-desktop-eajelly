@@ -312,7 +312,11 @@
         }
         canPlayItem(item) { return this.canPlayMediaType(item.MediaType); }
         supportsPlayMethod() { return true; }
-        static getSupportedFeatures() { return ['PlaybackRate', 'SetAspectRatio']; }
+        static getSupportedFeatures() {
+            const features = ['PlaybackRate', 'SetAspectRatio'];
+            if (window.jmpNative?.setPictureInPicture) features.push('PictureInPicture');
+            return features;
+        }
         supports(feature) { return mpvVideoPlayer.getSupportedFeatures().includes(feature); }
         isFullscreen() { return window._isFullscreen === true; }
         toggleFullscreen() {
@@ -325,14 +329,31 @@
         }
 
         canSetAudioStreamIndex() { return !this._forceServerReload; }
-        setPictureInPictureEnabled() {}
-        isPictureInPictureEnabled() { return false; }
+        _pictureInPictureAspectRatio() {
+            const streams = this._currentPlayOptions?.mediaSource?.MediaStreams || [];
+            const video = streams.find((stream) => stream.Type === 'Video');
+            const named = String(video?.AspectRatio || '').split(':').map(Number);
+            if (named.length === 2 && named[0] > 0 && named[1] > 0) {
+                return named[0] / named[1];
+            }
+            const width = Number(video?.Width);
+            const height = Number(video?.Height);
+            return width > 0 && height > 0 ? width / height : 16 / 9;
+        }
+        setPictureInPictureEnabled(enabled) {
+            if (window.jmpNative?.setPictureInPicture) {
+                window.jmpNative.setPictureInPicture(!!enabled, this._pictureInPictureAspectRatio());
+            }
+        }
+        isPictureInPictureEnabled() { return window._isPictureInPicture === true; }
         isAirPlayEnabled() { return false; }
         setAirPlayEnabled() {}
         setBrightness() {}
         getBrightness() { return 100; }
 
-        togglePictureInPicture() {}
+        togglePictureInPicture() {
+            this.setPictureInPictureEnabled(!this.isPictureInPictureEnabled());
+        }
         toggleAirPlay() {}
         getStats() { return Promise.resolve({ categories: [] }); }
         getSupportedAspectRatios() {

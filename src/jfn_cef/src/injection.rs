@@ -50,6 +50,7 @@ pub(crate) enum NativeFunction {
     ThemeColor,
     SetOsdVisible,
     ToggleFullscreen,
+    SetPictureInPicture,
     OpenAbout,
     GetSavedServerUrl,
     NavigateMain,
@@ -101,6 +102,7 @@ impl NativeFunction {
             "themeColor" => Self::ThemeColor,
             "setOsdVisible" => Self::SetOsdVisible,
             "toggleFullscreen" => Self::ToggleFullscreen,
+            "setPictureInPicture" => Self::SetPictureInPicture,
             "openAbout" => Self::OpenAbout,
             "getSavedServerUrl" => Self::GetSavedServerUrl,
             "navigateMain" => Self::NavigateMain,
@@ -153,6 +155,7 @@ impl NativeFunction {
             Self::ThemeColor => "themeColor",
             Self::SetOsdVisible => "setOsdVisible",
             Self::ToggleFullscreen => "toggleFullscreen",
+            Self::SetPictureInPicture => "setPictureInPicture",
             Self::OpenAbout => "openAbout",
             Self::GetSavedServerUrl => "getSavedServerUrl",
             Self::NavigateMain => "navigateMain",
@@ -498,6 +501,13 @@ pub(crate) fn build_for_kind(kind: &str, shared_textures_enabled: bool) -> Optio
             {
                 extra_info.window_decoration_options =
                     p.window_decoration_options().iter().collect();
+            }
+            if let Some(p) = jfn_platform_abi::try_get()
+                && p.picture_in_picture_supported()
+            {
+                extra_info
+                    .functions
+                    .push(NativeFunction::SetPictureInPicture);
             }
             extra_info.scripts.extend(
                 jfn_platform_abi::menu_scripts(MenuKind::Dropdown)

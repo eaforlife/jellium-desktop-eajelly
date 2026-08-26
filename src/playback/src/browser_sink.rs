@@ -47,9 +47,16 @@ pub(crate) fn deliver(ev: &PlaybackEvent) {
     match ev.kind {
         PlaybackEventKind::Started => call_exec_js("window._nativeEmit('playing')"),
         PlaybackEventKind::Paused => call_exec_js("window._nativeEmit('paused')"),
-        PlaybackEventKind::Finished => call_exec_js("window._nativeEmit('finished')"),
-        PlaybackEventKind::Canceled => call_exec_js("window._nativeEmit('canceled')"),
+        PlaybackEventKind::Finished => {
+            jfn_platform_abi::get().set_picture_in_picture(false, 1.0);
+            call_exec_js("window._nativeEmit('finished')");
+        }
+        PlaybackEventKind::Canceled => {
+            jfn_platform_abi::get().set_picture_in_picture(false, 1.0);
+            call_exec_js("window._nativeEmit('canceled')");
+        }
         PlaybackEventKind::Error => {
+            jfn_platform_abi::get().set_picture_in_picture(false, 1.0);
             let msg = if ev.error_message.is_empty() {
                 "Playback error"
             } else {
