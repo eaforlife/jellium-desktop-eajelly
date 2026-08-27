@@ -54,13 +54,13 @@ To verify the decoder selected by mpv, play the video and inspect `%LOCALAPPDATA
 
 ## Picture-in-picture
 
-During video playback on Windows, the PiP control beside fullscreen turns the app into a resizable, always-on-top video window. It opens at 25% of the current display while preserving the video's aspect ratio, and resizing is limited to a 15% minimum. Maximizing the window or resizing it to the display size exits PiP automatically. Playback completion also exits PiP before Jellyfin returns to the item page.
+During video playback on Windows, the PiP control beside fullscreen turns the app into an always-on-top video window without the standard Windows caption buttons. It opens at 25% of the current display and can be resized from 15% to 50% while preserving the video's aspect ratio. The overlay close button exits PiP and hides with the player controls. Playback completion also exits PiP before Jellyfin returns to the item page.
 
 PiP continues to use MPV's video and subtitle renderer rather than Chromium's HTML-video PiP. Embedded subtitle formats such as MP4 `mov_text`, ASS/SSA, PGS, and external subtitle tracks remain visible.
 
 ## Versions and updates
 
-The eajelly release line starts at `3.0.0-eajelly`. On Windows, the app checks GitHub Releases shortly after launch. When an update is available, choose **Download and install** to download the architecture-matched installer; the app closes and opens the installer when it is ready. The cogwheel/account menu and right-click context menu also provide **Check for Updates** and **About**. macOS and Linux currently use the manual release-page flow.
+The eajelly release line starts at `3.0.0-eajelly`. On Windows, the app checks GitHub Releases shortly after launch. When an update is available, choose **Download and install** to download the architecture-matched installer; the app closes and opens the installer when it is ready. The right-click context menu also provides **Check for Updates** and **About**. macOS and Linux currently use the manual release-page flow.
 
 The GitHub Actions workflows build Windows installers and portable archives, macOS DMGs, Linux AppImages, Debian packages, and a Flatpak bundle. Tag builds attach their outputs to the GitHub release automatically.
 

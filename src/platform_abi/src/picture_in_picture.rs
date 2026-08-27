@@ -9,6 +9,7 @@ use crate::PhysicalSize;
 
 pub const DEFAULT_SCREEN_FRACTION: f64 = 0.25;
 pub const MINIMUM_SCREEN_FRACTION: f64 = 0.15;
+pub const MAXIMUM_SCREEN_FRACTION: f64 = 0.50;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 type Subscriber = Arc<dyn Fn(bool) + Send + Sync>;
@@ -94,6 +95,18 @@ mod tests {
                 MINIMUM_SCREEN_FRACTION,
             ),
             PhysicalSize { w: 576, h: 324 }
+        );
+    }
+
+    #[test]
+    fn landscape_video_fits_half_of_display() {
+        assert_eq!(
+            fit_display_fraction(
+                PhysicalSize { w: 1920, h: 1080 },
+                16.0 / 9.0,
+                MAXIMUM_SCREEN_FRACTION,
+            ),
+            PhysicalSize { w: 960, h: 540 }
         );
     }
 }

@@ -18,14 +18,16 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CWPRETSTRUCT, CallNextHookEx, GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, GetWindowPlacement,
-    GetWindowRect, GetWindowThreadProcessId, HHOOK, HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed,
-    MINMAXINFO, SET_WINDOW_POS_FLAGS, SIZE_MAXIMIZED, SIZE_MINIMIZED, SPI_GETWORKAREA, SW_RESTORE,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    SetWindowPlacement, SetWindowPos, SetWindowsHookExW, ShowWindow, SystemParametersInfoW,
-    UnhookWindowsHookEx, WH_CALLWNDPROCRET, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT,
-    WM_CLOSE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOVE, WM_SIZE, WM_STYLECHANGED, WS_CAPTION,
-    WS_THICKFRAME,
+    CWPRETSTRUCT, CWPSTRUCT, CallNextHookEx, GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW,
+    GetWindowPlacement, GetWindowThreadProcessId, HHOOK, HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed,
+    MINMAXINFO, SET_WINDOW_POS_FLAGS, SIZE_MINIMIZED, SPI_GETWORKAREA, SW_RESTORE,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowsHookExW, ShowWindow,
+    SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROC, WH_CALLWNDPROCRET, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WINDOWPLACEMENT, WM_CLOSE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOVE, WM_SIZE,
+    WM_SIZING, WM_STYLECHANGED, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT,
+    WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    WS_SYSMENU,
 };
 
 use jfn_mpv::api::{
@@ -35,7 +37,7 @@ use jfn_mpv::api::{
 use jfn_mpv::boot::jfn_mpv_handle_get;
 use jfn_platform_abi::geometry::{Bounds, WindowGeometry, clamp_to_bounds};
 use jfn_platform_abi::picture_in_picture::{
-    DEFAULT_SCREEN_FRACTION, MINIMUM_SCREEN_FRACTION, fit_display_fraction,
+    DEFAULT_SCREEN_FRACTION, MAXIMUM_SCREEN_FRACTION, MINIMUM_SCREEN_FRACTION, fit_display_fraction,
 };
 use jfn_platform_abi::{PhysicalSize, picture_in_picture};
 use jfn_playback::shutdown::jfn_shutdown_initiate;
@@ -49,6 +51,7 @@ struct WinState {
     mpv_hwnd_raw: usize,
     was_minimized: bool,
     restore_maximized_on_unfullscreen: bool,
+    wndproc_pre_hook_raw: usize,
     wndproc_hook_raw: usize,
     input_thread: Option<JoinHandle<()>>,
     picture_in_picture: Option<PictureInPictureState>,
@@ -58,8 +61,11 @@ struct WinState {
 #[derive(Clone, Copy)]
 struct PictureInPictureState {
     restore: WINDOWPLACEMENT,
-    minimum_outer: POINT,
-    work_area: RECT,
+    window_style: isize,
+    minimum_client: PhysicalSize,
+    maximum_client: PhysicalSize,
+    frame: PhysicalSize,
+    aspect_ratio: f64,
 }
 
 impl WinState {
@@ -68,6 +74,7 @@ impl WinState {
             mpv_hwnd_raw: 0,
             was_minimized: false,
             restore_maximized_on_unfullscreen: false,
+            wndproc_pre_hook_raw: 0,
             wndproc_hook_raw: 0,
             input_thread: None,
             picture_in_picture: None,
@@ -225,18 +232,9 @@ fn enter_picture_in_picture(hwnd: HWND, aspect_ratio: f64) {
         w: work.right - work.left,
         h: work.bottom - work.top,
     };
-    let Some(default_outer) = outer_size_for_client(
-        hwnd,
-        fit_display_fraction(display, aspect_ratio, DEFAULT_SCREEN_FRACTION),
-    ) else {
-        return;
-    };
-    let Some(minimum_outer) = outer_size_for_client(
-        hwnd,
-        fit_display_fraction(display, aspect_ratio, MINIMUM_SCREEN_FRACTION),
-    ) else {
-        return;
-    };
+    let default_client = fit_display_fraction(display, aspect_ratio, DEFAULT_SCREEN_FRACTION);
+    let minimum_client = fit_display_fraction(display, aspect_ratio, MINIMUM_SCREEN_FRACTION);
+    let maximum_client = fit_display_fraction(display, aspect_ratio, MAXIMUM_SCREEN_FRACTION);
     let mut restore = WINDOWPLACEMENT {
         length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
         ..Default::default()
@@ -245,20 +243,34 @@ fn enter_picture_in_picture(hwnd: HWND, aspect_ratio: f64) {
         return;
     }
 
-    // PiP is a floating window. Preserve the placement first, then leave any
-    // maximized state before sizing it into the working area's lower-right.
+    // Preserve the placement, then remove the caption and system buttons. The
+    // thick frame remains as an invisible resize target; with no caption or
+    // maximize affordance Windows does not offer snap layouts for the PiP.
+    let window_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
     let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
+    let pip_style = window_style
+        & !((WS_CAPTION.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_SYSMENU.0) as isize);
+    unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, pip_style) };
+    let Some(default_outer) = outer_size_for_client(hwnd, default_client) else {
+        unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, window_style) };
+        let _ = unsafe { SetWindowPlacement(hwnd, &restore) };
+        return;
+    };
+    let frame = PhysicalSize {
+        w: default_outer.w - default_client.w,
+        h: default_outer.h - default_client.h,
+    };
     let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
     let margin = ((16 * dpi) / 96) as i32;
     let x = work.right - default_outer.w - margin;
     let y = work.bottom - default_outer.h - margin;
     STATE.lock().picture_in_picture = Some(PictureInPictureState {
         restore,
-        minimum_outer: POINT {
-            x: minimum_outer.w,
-            y: minimum_outer.h,
-        },
-        work_area: work,
+        window_style,
+        minimum_client,
+        maximum_client,
+        frame,
+        aspect_ratio: f64::from(default_client.w) / f64::from(default_client.h),
     });
     if unsafe {
         SetWindowPos(
@@ -268,12 +280,13 @@ fn enter_picture_in_picture(hwnd: HWND, aspect_ratio: f64) {
             y,
             default_outer.w,
             default_outer.h,
-            SWP_NOACTIVATE,
+            SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0 | SWP_FRAMECHANGED.0),
         )
     }
     .is_err()
     {
         STATE.lock().picture_in_picture = None;
+        unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, window_style) };
         let _ = unsafe { SetWindowPlacement(hwnd, &restore) };
         return;
     }
@@ -285,7 +298,9 @@ fn leave_picture_in_picture(hwnd: HWND, restore_placement: bool) {
     let Some(state) = state else {
         return;
     };
-    let flags = SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0);
+    unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, state.window_style) };
+    let flags =
+        SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0 | SWP_FRAMECHANGED.0);
     let _ = unsafe { SetWindowPos(hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, flags) };
     if restore_placement {
         let _ = unsafe { SetWindowPlacement(hwnd, &state.restore) };
@@ -314,24 +329,72 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
     enter_picture_in_picture(hwnd, aspect_ratio);
 }
 
-fn cancel_picture_in_picture_for_window_action(hwnd: HWND, size_kind: usize) {
-    let should_cancel = {
-        let state = STATE.lock();
-        let Some(pip) = state.picture_in_picture else {
-            return;
-        };
-        if size_kind == SIZE_MAXIMIZED as usize {
-            true
-        } else {
-            let mut rect = RECT::default();
-            unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok()
-                && rect.right - rect.left >= pip.work_area.right - pip.work_area.left
-                && rect.bottom - rect.top >= pip.work_area.bottom - pip.work_area.top
-        }
+fn constrain_picture_in_picture_rect(rect: &mut RECT, edge: usize, pip: PictureInPictureState) {
+    let candidate_w = (rect.right - rect.left - pip.frame.w).max(1);
+    let candidate_h = (rect.bottom - rect.top - pip.frame.h).max(1);
+    let width_from_height = (f64::from(candidate_h) * pip.aspect_ratio).round() as i32;
+    let height_from_width = (f64::from(candidate_w) / pip.aspect_ratio).round() as i32;
+    let horizontal_edge = edge == WMSZ_LEFT as usize || edge == WMSZ_RIGHT as usize;
+    let vertical_edge = edge == WMSZ_TOP as usize || edge == WMSZ_BOTTOM as usize;
+    let corner_follows_height = !horizontal_edge
+        && !vertical_edge
+        && (width_from_height - candidate_w).abs() < (height_from_width - candidate_h).abs();
+    let mut client_w = if vertical_edge || corner_follows_height {
+        width_from_height
+    } else {
+        candidate_w
     };
-    if should_cancel {
-        leave_picture_in_picture(hwnd, false);
+    client_w = client_w.clamp(pip.minimum_client.w, pip.maximum_client.w);
+    let client_h = (f64::from(client_w) / pip.aspect_ratio).round() as i32;
+    let outer_w = client_w + pip.frame.w;
+    let outer_h = client_h + pip.frame.h;
+
+    if edge == WMSZ_LEFT as usize
+        || edge == WMSZ_TOPLEFT as usize
+        || edge == WMSZ_BOTTOMLEFT as usize
+    {
+        rect.left = rect.right - outer_w;
+    } else {
+        rect.right = rect.left + outer_w;
     }
+    if edge == WMSZ_TOP as usize || edge == WMSZ_TOPLEFT as usize || edge == WMSZ_TOPRIGHT as usize
+    {
+        rect.top = rect.bottom - outer_h;
+    } else {
+        rect.bottom = rect.top + outer_h;
+    }
+}
+
+unsafe extern "system" fn mpv_wndproc_pre_hook(n_code: c_int, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if n_code >= 0 {
+        let msg = unsafe { &*(lp.0 as *const CWPSTRUCT) };
+        let state = STATE.lock();
+        if (msg.hwnd.0 as usize) == state.mpv_hwnd_raw
+            && let Some(pip) = state.picture_in_picture
+        {
+            match msg.message {
+                WM_GETMINMAXINFO => {
+                    let minmax = unsafe { &mut *(msg.lParam.0 as *mut MINMAXINFO) };
+                    minmax.ptMinTrackSize = POINT {
+                        x: pip.minimum_client.w + pip.frame.w,
+                        y: pip.minimum_client.h + pip.frame.h,
+                    };
+                    minmax.ptMaxTrackSize = POINT {
+                        x: pip.maximum_client.w + pip.frame.w,
+                        y: pip.maximum_client.h + pip.frame.h,
+                    };
+                }
+                WM_SIZING => {
+                    let rect = unsafe { &mut *(msg.lParam.0 as *mut RECT) };
+                    constrain_picture_in_picture_rect(rect, msg.wParam.0, pip);
+                }
+                _ => {}
+            }
+        }
+    }
+    let hook_raw = STATE.lock().wndproc_pre_hook_raw;
+    let hook = HHOOK(hook_raw as *mut c_void);
+    unsafe { CallNextHookEx(Some(hook), n_code, wp, lp) }
 }
 
 unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -353,16 +416,9 @@ unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM
                     if restored {
                         jfn_playback::lifecycle::jfn_lifecycle_set_visible(true);
                     }
-                    cancel_picture_in_picture_for_window_action(msg.hwnd, msg.wParam.0);
                 }
                 WM_MOVE => {
                     crate::window::sample();
-                }
-                WM_GETMINMAXINFO => {
-                    if let Some(pip) = STATE.lock().picture_in_picture {
-                        let minmax = unsafe { &mut *(msg.lParam.0 as *mut MINMAXINFO) };
-                        minmax.ptMinTrackSize = pip.minimum_outer;
-                    }
                 }
                 WM_DPICHANGED | WM_STYLECHANGED => {
                     crate::window::publish_deferred();
@@ -401,12 +457,26 @@ pub(crate) fn win_init(_mpv: *mut c_void) -> bool {
 
     crate::window::start_notifier();
     let mpv_tid = unsafe { GetWindowThreadProcessId(hwnd_from_raw(hwnd_raw), None) };
+    let pre_hook =
+        unsafe { SetWindowsHookExW(WH_CALLWNDPROC, Some(mpv_wndproc_pre_hook), None, mpv_tid) };
+    match pre_hook {
+        Ok(h) => STATE.lock().wndproc_pre_hook_raw = h.0 as usize,
+        Err(e) => {
+            tracing::error!("SetWindowsHookExW(WH_CALLWNDPROC) failed: {e:?}");
+            return false;
+        }
+    }
     let hook =
         unsafe { SetWindowsHookExW(WH_CALLWNDPROCRET, Some(mpv_wndproc_hook), None, mpv_tid) };
     match hook {
         Ok(h) => STATE.lock().wndproc_hook_raw = h.0 as usize,
         Err(e) => {
             tracing::error!("SetWindowsHookExW(WH_CALLWNDPROCRET) failed: {e:?}");
+            let pre_hook = HHOOK(STATE.lock().wndproc_pre_hook_raw as *mut c_void);
+            unsafe {
+                let _ = UnhookWindowsHookEx(pre_hook);
+            }
+            STATE.lock().wndproc_pre_hook_raw = 0;
             return false;
         }
     }
@@ -427,6 +497,14 @@ pub(crate) fn win_cleanup() {
     let join = STATE.lock().input_thread.take();
     if let Some(j) = join {
         let _ = j.join();
+    }
+    let pre_hook_raw = STATE.lock().wndproc_pre_hook_raw;
+    if pre_hook_raw != 0 {
+        let hook = HHOOK(pre_hook_raw as *mut c_void);
+        unsafe {
+            let _ = UnhookWindowsHookEx(hook);
+        }
+        STATE.lock().wndproc_pre_hook_raw = 0;
     }
     let hook_raw = STATE.lock().wndproc_hook_raw;
     if hook_raw != 0 {

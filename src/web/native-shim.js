@@ -417,9 +417,88 @@
             player.events.trigger(player, 'fullscreenchange');
         }
     };
+    let pictureInPictureCloseHost = null;
+    let videoOsdVisible = false;
+
+    function isPictureInPictureControl(node) {
+        if (!(node instanceof Element)) return false;
+        const button = node.matches('button') ? node : node.closest('button');
+        if (!button || button.closest('jmp-pip-close')) return false;
+        const identity = [button.className, button.id, button.title, button.getAttribute('aria-label')]
+            .map(value => String(value || '').toLowerCase())
+            .join(' ');
+        if (identity.includes('pictureinpicture') || identity.includes('picture-in-picture')) {
+            return true;
+        }
+        const icon = button.querySelector('.material-icons, .material-symbols-rounded, .material-symbols-outlined');
+        return icon && ['picture_in_picture', 'picture_in_picture_alt']
+            .includes(icon.textContent.trim().toLowerCase());
+    }
+
+    function markPictureInPictureControls(root) {
+        if (!(root instanceof Element) && root !== document) return;
+        const candidates = [];
+        if (root instanceof Element && root.matches('button')) candidates.push(root);
+        if (root.querySelectorAll) candidates.push(...root.querySelectorAll('button'));
+        for (const candidate of candidates) {
+            if (isPictureInPictureControl(candidate)) {
+                candidate.dataset.jmpPictureInPictureControl = '1';
+            }
+        }
+    }
+
+    function updatePictureInPictureUi() {
+        document.documentElement.classList.toggle('jmp-pip-active', window._isPictureInPicture);
+        if (window._isPictureInPicture) markPictureInPictureControls(document);
+        if (pictureInPictureCloseHost) {
+            pictureInPictureCloseHost.dataset.visible =
+                window._isPictureInPicture && videoOsdVisible ? '1' : '0';
+        }
+    }
+
+    function buildPictureInPictureCloseButton() {
+        if (pictureInPictureCloseHost) return;
+        const host = document.createElement('jmp-pip-close');
+        const root = host.attachShadow({ mode: 'closed' });
+        const style = document.createElement('style');
+        style.textContent = `
+            :host { position: fixed; top: 12px; right: 12px; z-index: 2147483647;
+                    display: none; width: 38px; height: 38px; pointer-events: none; }
+            :host([data-visible="1"]) { display: block; }
+            button { all: unset; position: relative; box-sizing: border-box; width: 38px; height: 38px;
+                     border-radius: 50%; background: rgba(20, 20, 20, .72); color: white;
+                     cursor: pointer; pointer-events: auto; box-shadow: 0 1px 5px rgba(0, 0, 0, .45); }
+            button:hover, button:focus-visible { background: #c42b1c; }
+            button::before, button::after { content: ''; position: absolute; top: 18px; left: 10px;
+                                            width: 18px; height: 2px; border-radius: 1px;
+                                            background: currentColor; }
+            button::before { transform: rotate(45deg); }
+            button::after { transform: rotate(-45deg); }`;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.title = 'Exit picture-in-picture';
+        button.setAttribute('aria-label', 'Exit picture-in-picture');
+        button.addEventListener('mousedown', event => event.stopPropagation());
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const player = window._mpvVideoPlayerInstance;
+            if (player && typeof player.setPictureInPictureEnabled === 'function') {
+                player.setPictureInPictureEnabled(false);
+            } else if (window.jmpNative?.setPictureInPicture) {
+                window.jmpNative.setPictureInPicture(false, 1);
+            }
+        });
+        root.append(style, button);
+        pictureInPictureCloseHost = host;
+        document.documentElement.appendChild(host);
+        updatePictureInPictureUi();
+    }
+
     window._isPictureInPicture = false;
     window._nativePictureInPictureChanged = function(active) {
         window._isPictureInPicture = !!active;
+        updatePictureInPictureUi();
         const player = window._mpvVideoPlayerInstance;
         if (player && player.events) {
             player.events.trigger(player, 'pictureinpicturechange');
@@ -531,6 +610,7 @@
         const style = document.createElement('style');
         let css = 'body.mouseIdle, body.mouseIdle * { cursor: none !important; }';
         css += '\n@keyframes mpv-video-zoomin { from { transform: scale3d(0.2, 0.2, 0.2); opacity: 0.6; } to { transform: none; opacity: initial; } }';
+        css += '\nhtml.jmp-pip-active [data-jmp-picture-in-picture-control="1"] { display: none !important; }';
 
         // Hide scrollbars app-wide (scroll still works via wheel/trackpad/keys).
         if (jmpInfo.settings.advanced.hideScrollbar) {
@@ -550,81 +630,34 @@
             // Dialog headers (e.g. client settings modal)
             css += '\n.formDialogHeader { padding-top: var(--mac-titlebar-height) !important; }';
 
-            // Hide/show traffic lights with the video OSD.
-            // jellyfin-web uses an internal Events.trigger() system (obj._callbacks),
-            // not DOM events. Register directly on that callback structure.
-            document._callbacks = document._callbacks || {};
-            document._callbacks['SHOW_VIDEO_OSD'] = document._callbacks['SHOW_VIDEO_OSD'] || [];
-            document._callbacks['SHOW_VIDEO_OSD'].push((_e, visible) => {
-                if (window.jmpNative && window.jmpNative.setOsdVisible) {
-                    window.jmpNative.setOsdVisible(!!visible);
-                }
-            });
         }
 
         style.textContent = css;
         document.head.appendChild(style);
 
-        // Jellyfin already adds Client Settings and Exit to its account/cog
-        // menu through the NativeShell feature flags below. Use that stable
-        // Client Settings entry as the anchor for the remaining native app
-        // actions that are also available from the right-click context menu.
-        const addAppActionsToCogMenu = (root) => {
-            if (!(root instanceof Element) && root !== document) return;
-            const candidates = [];
-            if (root instanceof Element && root.matches('button, a')) candidates.push(root);
-            if (root.querySelectorAll) candidates.push(...root.querySelectorAll('button, a'));
-            for (const candidate of candidates) {
-                if (candidate.dataset.jelliumAction) continue;
-                const label = candidate.textContent.trim().toLowerCase();
-                const isClientSettings = candidate.classList.contains('btnClientSettings')
-                    || label === 'client settings';
-                if (!isClientSettings) continue;
-
-                const menu = candidate.parentElement;
-                if (!menu || menu.querySelector('[data-jellium-action]')) continue;
-                const actions = [
-                    ['fullscreen', 'Toggle Fullscreen', 'fullscreen', () => window.jmpNative.toggleFullscreen()],
-                    ['updates', 'Check for Updates', 'system_update_alt', () => window.jmpNative.openAbout()],
-                    ['about', 'About Jellium Desktop', 'info', () => window.jmpNative.openAbout()]
-                ];
-                let insertionPoint = candidate;
-                for (const [id, text, icon, handler] of actions) {
-                    // Keep Jellyfin's complete list-item structure so padding,
-                    // focus treatment, typography and icon columns stay aligned.
-                    const item = candidate.cloneNode(true);
-                    item.querySelectorAll('[id]').forEach((node) => node.removeAttribute('id'));
-                    item.removeAttribute('id');
-                    item.dataset.jelliumAction = id;
-                    item.setAttribute('aria-label', text);
-                    const iconNode = item.querySelector('.listItemIcon, .material-icons, .material-symbols-rounded, .material-symbols-outlined');
-                    const textNode = item.querySelector('.listItemBodyText, .actionSheetItemText, [class*="BodyText"]');
-                    if (iconNode) iconNode.textContent = icon;
-                    if (textNode) {
-                        textNode.textContent = text;
-                    } else {
-                        // Older Jellyfin menus put the label directly in the
-                        // button. Rebuild only that fallback shape.
-                        item.textContent = text;
-                    }
-                    item.addEventListener('click', (event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        handler();
-                    });
-                    insertionPoint.after(item);
-                    insertionPoint = item;
-                }
-            }
-        };
-        addAppActionsToCogMenu(document);
+        buildPictureInPictureCloseButton();
+        markPictureInPictureControls(document);
         new MutationObserver((mutations) => {
             for (const mutation of mutations) {
                 for (const node of mutation.addedNodes) {
-                    if (node instanceof Element) addAppActionsToCogMenu(node);
+                    if (node instanceof Element) markPictureInPictureControls(node);
                 }
             }
         }).observe(document.body, { childList: true, subtree: true });
+
+        // The PiP close overlay follows the same visibility signal as the
+        // player controls. macOS traffic lights continue to consume it too.
+        document._callbacks = document._callbacks || {};
+        document._callbacks['SHOW_VIDEO_OSD'] = document._callbacks['SHOW_VIDEO_OSD'] || [];
+        document._callbacks['SHOW_VIDEO_OSD'].push((_e, visible) => {
+            videoOsdVisible = !!visible;
+            updatePictureInPictureUi();
+            if (navigator.platform.startsWith('Mac')
+                && jmpInfo.settings.advanced.transparentTitlebar
+                && window.jmpNative?.setOsdVisible) {
+                window.jmpNative.setOsdVisible(videoOsdVisible);
+            }
+        });
 
         // Sync titlebar color with theme-color meta tag
         const meta = document.querySelector('meta[name="theme-color"]');
