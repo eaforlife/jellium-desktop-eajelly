@@ -424,10 +424,14 @@
         if (!(node instanceof Element)) return false;
         const button = node.matches('button') ? node : node.closest('button');
         if (!button || button.closest('jmp-pip-close')) return false;
-        const identity = [button.className, button.id, button.title, button.getAttribute('aria-label')]
+        const descendants = [...button.querySelectorAll('*')];
+        const identity = [button, ...descendants]
+            .flatMap(element => [element.className, element.id, element.title,
+                element.getAttribute('aria-label')])
             .map(value => String(value || '').toLowerCase())
             .join(' ');
-        if (identity.includes('pictureinpicture') || identity.includes('picture-in-picture')) {
+        if (identity.includes('pictureinpicture') || identity.includes('picture-in-picture')
+            || identity.includes('picture_in_picture') || identity.includes('btnpip')) {
             return true;
         }
         const icon = button.querySelector('.material-icons, .material-symbols-rounded, .material-symbols-outlined');
@@ -462,10 +466,16 @@
         const root = host.attachShadow({ mode: 'closed' });
         const style = document.createElement('style');
         style.textContent = `
-            :host { position: fixed; top: 12px; right: 12px; z-index: 2147483647;
-                    display: none; width: 38px; height: 38px; pointer-events: none; }
+            :host { position: fixed; inset: 0; z-index: 2147483647;
+                    display: none; pointer-events: none; }
             :host([data-visible="1"]) { display: block; }
-            button { all: unset; position: relative; box-sizing: border-box; width: 38px; height: 38px;
+            .drag { position: absolute; top: 0; left: 48px; right: 62px; height: 44px;
+                    pointer-events: auto; cursor: move; }
+            .drag::after { content: ''; position: absolute; top: 8px; left: 50%; width: 40px;
+                           height: 4px; transform: translateX(-50%); border-radius: 2px;
+                           background: rgba(255, 255, 255, .72); box-shadow: 0 1px 3px rgba(0, 0, 0, .65); }
+            button { all: unset; position: absolute; top: 12px; right: 12px;
+                     box-sizing: border-box; width: 38px; height: 38px;
                      border-radius: 50%; background: rgba(20, 20, 20, .72); color: white;
                      cursor: pointer; pointer-events: auto; box-shadow: 0 1px 5px rgba(0, 0, 0, .45); }
             button:hover, button:focus-visible { background: #c42b1c; }
@@ -489,7 +499,16 @@
                 window.jmpNative.setPictureInPicture(false, 1);
             }
         });
-        root.append(style, button);
+        const drag = document.createElement('div');
+        drag.className = 'drag';
+        drag.title = 'Drag picture-in-picture';
+        drag.addEventListener('mousedown', event => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (window.jmpNative?.windowStartMove) window.jmpNative.windowStartMove();
+        });
+        root.append(style, drag, button);
         pictureInPictureCloseHost = host;
         document.documentElement.appendChild(host);
         updatePictureInPictureUi();

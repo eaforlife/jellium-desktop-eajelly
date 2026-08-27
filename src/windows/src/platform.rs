@@ -19,15 +19,15 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     CWPRETSTRUCT, CWPSTRUCT, CallNextHookEx, GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW,
-    GetWindowPlacement, GetWindowThreadProcessId, HHOOK, HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed,
-    MINMAXINFO, SET_WINDOW_POS_FLAGS, SIZE_MINIMIZED, SPI_GETWORKAREA, SW_RESTORE,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowsHookExW, ShowWindow,
-    SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROC, WH_CALLWNDPROCRET, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WINDOWPLACEMENT, WM_CLOSE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOVE, WM_SIZE,
-    WM_SIZING, WM_STYLECHANGED, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP,
-    WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
-    WS_THICKFRAME,
+    GetWindowPlacement, GetWindowRect, GetWindowThreadProcessId, HHOOK, HWND_NOTOPMOST,
+    HWND_TOPMOST, IsZoomed, MINMAXINFO, SET_WINDOW_POS_FLAGS, SIZE_MINIMIZED, SPI_GETWORKAREA,
+    SW_RESTORE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
+    SetWindowsHookExW, ShowWindow, SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROC,
+    WH_CALLWNDPROCRET, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_CLOSE, WM_DPICHANGED,
+    WM_GETMINMAXINFO, WM_MOVE, WM_SIZE, WM_SIZING, WM_STYLECHANGED, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT,
+    WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WS_CAPTION, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use jfn_mpv::api::{
@@ -61,6 +61,7 @@ struct WinState {
 #[derive(Clone, Copy)]
 struct PictureInPictureState {
     restore: WINDOWPLACEMENT,
+    restore_rect: RECT,
     window_style: isize,
     minimum_client: PhysicalSize,
     maximum_client: PhysicalSize,
@@ -242,6 +243,10 @@ fn enter_picture_in_picture(hwnd: HWND, aspect_ratio: f64) {
     if unsafe { GetWindowPlacement(hwnd, &mut restore) }.is_err() {
         return;
     }
+    let mut restore_rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut restore_rect) }.is_err() {
+        return;
+    }
 
     // Preserve the placement, then remove the caption and system buttons. The
     // thick frame remains as an invisible resize target; with no caption or
@@ -266,6 +271,7 @@ fn enter_picture_in_picture(hwnd: HWND, aspect_ratio: f64) {
     let y = work.bottom - default_outer.h - margin;
     STATE.lock().picture_in_picture = Some(PictureInPictureState {
         restore,
+        restore_rect,
         window_style,
         minimum_client,
         maximum_client,
@@ -299,12 +305,31 @@ fn leave_picture_in_picture(hwnd: HWND, restore_placement: bool) {
         return;
     };
     unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, state.window_style) };
-    let flags =
-        SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0 | SWP_FRAMECHANGED.0);
-    let _ = unsafe { SetWindowPos(hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, flags) };
     if restore_placement {
+        // Restore the exact outer rectangle as well as WINDOWPLACEMENT. mpv's
+        // normal-window placement can be updated by the PiP SetWindowPos;
+        // relying on SetWindowPlacement alone can therefore leave the window
+        // at PiP dimensions after the caption is restored.
+        let rect = state.restore_rect;
+        let flags = SET_WINDOW_POS_FLAGS(SWP_NOACTIVATE.0 | SWP_FRAMECHANGED.0);
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                Some(HWND_NOTOPMOST),
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                flags,
+            )
+        };
         let _ = unsafe { SetWindowPlacement(hwnd, &state.restore) };
         crate::window::sample();
+    } else {
+        let flags = SET_WINDOW_POS_FLAGS(
+            SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0 | SWP_FRAMECHANGED.0,
+        );
+        let _ = unsafe { SetWindowPos(hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, flags) };
     }
     picture_in_picture::notify(false);
 }

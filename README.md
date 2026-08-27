@@ -54,7 +54,7 @@ To verify the decoder selected by mpv, play the video and inspect `%LOCALAPPDATA
 
 ## Picture-in-picture
 
-During video playback on Windows, the PiP control beside fullscreen turns the app into an always-on-top video window without the standard Windows caption buttons. It opens at 25% of the current display and can be resized from 15% to 50% while preserving the video's aspect ratio. The overlay close button exits PiP and hides with the player controls. Playback completion also exits PiP before Jellyfin returns to the item page.
+During video playback on Windows, the PiP control beside fullscreen turns the app into an always-on-top video window without the standard Windows caption buttons. It opens at 25% of the current display and can be resized from 15% to 50% while preserving the video's aspect ratio. When the player controls are visible, use the top drag handle to move the PiP window or the overlay close button to exit PiP. Exiting restores the previous window size, position, and state. Playback completion also exits PiP before Jellyfin returns to the item page.
 
 PiP continues to use MPV's video and subtitle renderer rather than Chromium's HTML-video PiP. Embedded subtitle formats such as MP4 `mov_text`, ASS/SSA, PGS, and external subtitle tracks remain visible.
 

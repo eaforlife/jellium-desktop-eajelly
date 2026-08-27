@@ -31,7 +31,7 @@ mod process;
 mod render;
 mod window;
 
-use crate::input::jfn_input_windows_set_cursor;
+use crate::input::{jfn_input_windows_set_cursor, jfn_input_windows_start_move};
 use crate::platform::{
     win_clamp_window_geometry, win_cleanup, win_early_init, win_get_display_scale, win_get_scale,
     win_init, win_set_fullscreen, win_set_picture_in_picture, win_toggle_fullscreen,
@@ -239,6 +239,12 @@ impl Platform for WindowsPlatform {
 
     fn set_picture_in_picture(&self, enabled: bool, aspect_ratio: f64) {
         win_set_picture_in_picture(enabled, aspect_ratio);
+    }
+
+    fn window_start_move(&self) {
+        if jfn_platform_abi::picture_in_picture::active() {
+            jfn_input_windows_start_move();
+        }
     }
 
     fn prepare_window_geometry_persist(&self) {
