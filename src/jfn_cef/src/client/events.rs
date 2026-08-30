@@ -59,7 +59,7 @@ impl Inner {
         }
     }
 
-    pub(crate) fn on_load_error(&self, code: c_int, text: &str, url: &str) {
+    pub(crate) fn on_load_error(&self, is_main: bool, code: c_int, text: &str, url: &str) {
         let formatted = format!(
             "OnLoadError name={} url={} error={} {}",
             self.name_str(),
@@ -72,6 +72,24 @@ impl Inner {
             jfn_logging::LEVEL_ERROR,
             &formatted,
         );
+
+        // Normal launches try TLS first. Downgrade only the fixed web layer's
+        // failed root navigation, once; ERR_ABORTED is emitted for redirects
+        // and cancelled navigations and must not trigger the fallback.
+        const ERR_ABORTED: c_int = -3;
+        if is_main
+            && code != ERR_ABORTED
+            && self.name_str() == "web"
+            && let Some(fallback) = jfn_config::server_fallback_url(url)
+            && !self.server_fallback_attempted.swap(true, Ordering::AcqRel)
+        {
+            jfn_logging::log(
+                jfn_logging::CATEGORY_CEF,
+                jfn_logging::LEVEL_WARN,
+                &format!("HTTPS server connection failed; retrying {fallback}"),
+            );
+            self.cef_load_url(fallback);
+        }
     }
 
     pub(crate) fn set_visible(&self, visible: bool) {

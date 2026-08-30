@@ -19,7 +19,8 @@ use std::thread::{self, JoinHandle};
 
 const DEVICE_NAME_MAX: usize = 64;
 const HWDEC_DEFAULT: &str = "auto";
-pub const PUBLIC_SERVER_URL: &str = "http://eajelly.xyz";
+pub const PUBLIC_SERVER_URL: &str = "https://eajelly.xyz";
+pub const FALLBACK_SERVER_URL: &str = "http://eajelly.xyz";
 
 #[derive(Clone, Copy, Debug)]
 pub struct JfnWindowGeometry {
@@ -522,6 +523,14 @@ pub fn server_url() -> String {
     PUBLIC_SERVER_URL.to_string()
 }
 
+/// Return the insecure fallback only when the fixed HTTPS server root failed.
+/// CEF canonicalizes a bare origin with a trailing slash, so accept both forms
+/// while refusing to downgrade failures on arbitrary server paths.
+pub fn server_fallback_url(failed_url: &str) -> Option<&'static str> {
+    (failed_url == PUBLIC_SERVER_URL || failed_url.strip_suffix('/') == Some(PUBLIC_SERVER_URL))
+        .then_some(FALLBACK_SERVER_URL)
+}
+
 /// Retained for IPC compatibility with older jellyfin-web code. Server
 /// changes are intentionally ignored in this single-server build.
 pub fn set_server_url(_value: &str) {}
@@ -786,6 +795,20 @@ mod tests {
         assert!(data.hide_scrollbar);
         assert_eq!(data.window.x, -1);
         assert_eq!(super::server_url(), super::PUBLIC_SERVER_URL);
+    }
+
+    #[test]
+    fn server_fallback_only_downgrades_the_https_root() {
+        assert_eq!(
+            super::server_fallback_url("https://eajelly.xyz"),
+            Some(super::FALLBACK_SERVER_URL)
+        );
+        assert_eq!(
+            super::server_fallback_url("https://eajelly.xyz/"),
+            Some(super::FALLBACK_SERVER_URL)
+        );
+        assert_eq!(super::server_fallback_url("https://eajelly.xyz/web/"), None);
+        assert_eq!(super::server_fallback_url("http://eajelly.xyz"), None);
     }
 
     #[test]

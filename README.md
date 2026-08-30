@@ -2,7 +2,7 @@
 
 Jellium Desktop - EAJelly is a preconfigured fork of [Jellium Desktop](https://github.com/andrewrabert/jellium-desktop), the unofficial [Jellyfin](https://jellyfin.org) desktop client built with [CEF](https://github.com/chromiumembedded/cef) and [mpv](https://mpv.io/).
 
-This fork opens `http://eajelly.xyz` directly and normally proceeds to the username and password screen without asking for a server address. Advanced users can launch the app with `--server-override` to show a server-address field before login for that session.
+This fork opens `https://eajelly.xyz` directly, falls back to `http://eajelly.xyz` if the secure connection fails, and normally proceeds to the username and password screen without asking for a server address. Advanced users can launch the app with `--server-override` to show a server-address field before login for that session.
 
 The upstream project and its contributors remain the foundation of this client. Fork-specific source and issue tracking are available in the [eajelly repository](https://github.com/eaforlife/jellium-desktop-eajelly).
 
