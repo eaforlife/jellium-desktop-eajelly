@@ -24,10 +24,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_RESTORE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
     SetWindowsHookExW, ShowWindow, SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROC,
-    WH_CALLWNDPROCRET, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_CLOSE, WM_DPICHANGED,
-    WM_GETMINMAXINFO, WM_MOVE, WM_SIZE, WM_SIZING, WM_STYLECHANGED, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT,
-    WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WS_CAPTION, WS_MAXIMIZEBOX,
-    WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    WH_CALLWNDPROCRET, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATE, WM_CLOSE,
+    WM_DPICHANGED, WM_GETMINMAXINFO, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOVE, WM_RBUTTONDBLCLK,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE, WM_SIZING, WM_STYLECHANGED, WM_XBUTTONDOWN,
+    WM_XBUTTONUP, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT,
+    WMSZ_TOPRIGHT, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use jfn_mpv::api::{
@@ -299,6 +301,35 @@ fn enter_picture_in_picture(hwnd: HWND, aspect_ratio: f64) {
     picture_in_picture::notify(true);
 }
 
+fn reassert_picture_in_picture_topmost(hwnd: HWND) {
+    if STATE.lock().picture_in_picture.is_none() {
+        return;
+    }
+    let flags = SET_WINDOW_POS_FLAGS(SWP_NOMOVE.0 | SWP_NOSIZE.0 | SWP_NOACTIVATE.0);
+    let _ = unsafe { SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags) };
+}
+
+fn should_reassert_picture_in_picture_topmost(message: u32) -> bool {
+    matches!(
+        message,
+        WM_ACTIVATE
+            | WM_SETFOCUS
+            | WM_MOUSEACTIVATE
+            | WM_LBUTTONDOWN
+            | WM_LBUTTONUP
+            | WM_LBUTTONDBLCLK
+            | WM_RBUTTONDOWN
+            | WM_RBUTTONUP
+            | WM_RBUTTONDBLCLK
+            | WM_MBUTTONDOWN
+            | WM_MBUTTONUP
+            | WM_MBUTTONDBLCLK
+            | WM_XBUTTONDOWN
+            | WM_XBUTTONUP
+            | WM_STYLECHANGED
+    )
+}
+
 fn leave_picture_in_picture(hwnd: HWND, restore_placement: bool) {
     let state = STATE.lock().picture_in_picture.take();
     let Some(state) = state else {
@@ -458,6 +489,9 @@ unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM
                 }
                 WM_CLOSE => jfn_shutdown_initiate(),
                 _ => {}
+            }
+            if should_reassert_picture_in_picture_topmost(msg.message) {
+                reassert_picture_in_picture_topmost(msg.hwnd);
             }
         }
     }
