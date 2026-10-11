@@ -23,6 +23,15 @@ Platform-specific entry points live in `dev/linux/`, `dev/macos/`, `dev/windows/
 ## Before Committing
 Run `just fmt` and `just lint` before every commit; both must pass clean (lint runs `fmt-check` + `clippy`, and CI rejects unformatted or lint-failing code).
 
+## Before Version Tags / Releases
+Before committing a new version or creating a release tag, run the same locked
+metadata lookup used by CI:
+`cargo metadata --format-version 1 --locked --manifest-path src/Cargo.toml`.
+If Cargo reports that it would update `src/Cargo.lock`, regenerate the lockfile
+with the repository's pinned dependencies, commit the resulting `Cargo.lock`,
+and rerun the locked lookup before tagging. Never tag a release with a dirty
+or out-of-date lockfile.
+
 ## Constants
 Every timing, interval or threshold derives from a value the system reports or
 from a value a requirements note records. A plan that is silent on a value the
