@@ -479,9 +479,11 @@
             const player = window._mpvVideoPlayerInstance;
             if (player && typeof player.setPictureInPictureEnabled === 'function') {
                 player.setPictureInPictureEnabled(!window._isPictureInPicture);
+            } else if (window.jmpNative?.setPictureInPicture) {
+                window.jmpNative.setPictureInPicture(!window._isPictureInPicture, 1);
             }
         });
-        button.style.cssText = 'position:fixed;right:16px;bottom:72px;z-index:2147483646;' +
+        button.style.cssText = 'position:fixed;left:60px;top:12px;z-index:2147483646;' +
             'width:40px;height:40px;border:0;border-radius:4px;background:rgba(20,20,20,.82);' +
             'color:#fff;cursor:pointer;font:18px sans-serif;box-shadow:0 1px 4px #0008;';
         button.textContent = '▣';

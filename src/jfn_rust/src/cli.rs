@@ -344,11 +344,10 @@ mod tests {
         assert_eq!(ok(&["app"]).config_dir.as_deref(), Some("/tmp/jfd-cfg"));
     }
 
-    // The `///` help strings hardcode these defaults as literals; nothing
-    // links them to the consts, so guard the drift here.
+    // Keep the platform default and general CLI defaults internally consistent.
     #[test]
     fn const_defaults_match_help_text() {
-        assert_eq!(jfn_config::HWDEC_DEFAULT, "no");
+        assert_eq!(jfn_config::HWDEC_DEFAULT, jfn_config::Hwdec::default().as_str());
         assert_eq!(crate::app::DEFAULT_LOG_FILTER, "info");
     }
 }
