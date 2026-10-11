@@ -94,6 +94,12 @@ pub fn menu_scripts(kind: MenuKind) -> &'static [MenuScript] {
     }
 }
 
+pub fn menu_delivery(kind: MenuKind) -> MenuDelivery<'static> {
+    // Menu construction happens after platform installation; the lease-based
+    // callers use the platform method directly when they need scoped access.
+    unsafe { crate::get().menu_delivery(kind) }
+}
+
 /// Native menu access is borrowed from the platform lease.
 ///
 /// ```compile_fail
