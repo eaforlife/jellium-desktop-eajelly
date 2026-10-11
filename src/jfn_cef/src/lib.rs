@@ -20,7 +20,6 @@ mod resource;
 mod runtime;
 mod server_probe;
 mod state;
-mod updater;
 mod v8_handler;
 pub mod version;
 mod web_input;

@@ -2634,9 +2634,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
- "sha2",
  "slotmap",
- "ureq",
  "thiserror 2.0.20",
 ]
 
