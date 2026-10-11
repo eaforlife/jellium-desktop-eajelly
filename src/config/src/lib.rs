@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::thread::{self, JoinHandle};
 
+pub mod hardware_decode;
+
 const DEVICE_NAME_MAX: usize = 64;
 const HWDEC_DEFAULT: &str = "auto";
 pub const PUBLIC_SERVER_URL: &str = "https://eajelly.xyz";
