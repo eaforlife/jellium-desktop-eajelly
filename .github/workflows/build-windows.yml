@@ -98,6 +98,34 @@ jobs:
           done
           exit 1
 
+      - name: Set up libclang for bindgen
+        shell: pwsh
+        run: |
+          # bindgen runs inside the MSVC-hosted Rust process. Prefer a native
+          # LLVM installation because MSYS2's libclang can be present yet fail
+          # to load from a MSVC process due to its MinGW runtime dependencies.
+          $candidates = @(
+            (Join-Path $env:ProgramFiles "LLVM\bin"),
+            (Join-Path ${env:ProgramFiles(x86)} "LLVM\bin")
+          )
+          $msysBin = "C:\msys64\${{ matrix.msystem }}".ToLowerInvariant() + "\bin"
+          $candidates += $msysBin
+          $clangDir = $candidates |
+            Where-Object { Test-Path (Join-Path $_ "libclang.dll") } |
+            Select-Object -First 1
+
+          if (-not $clangDir) {
+            choco install llvm -y --no-progress
+            $clangDir = Join-Path $env:ProgramFiles "LLVM\bin"
+          }
+          if (-not (Test-Path (Join-Path $clangDir "libclang.dll"))) {
+            throw "libclang.dll was not found after LLVM setup"
+          }
+
+          "LIBCLANG_PATH=$clangDir" >> $env:GITHUB_ENV
+          "PATH=$clangDir;$env:PATH" >> $env:GITHUB_ENV
+          Write-Host "Using libclang from $clangDir"
+
       - name: Build mpv from source
         if: steps.mpv-cache.outputs.cache-hit != 'true'
         shell: pwsh
@@ -107,12 +135,7 @@ jobs:
       - name: Build and package
         shell: cmd
         env:
-          # bindgen (used by jfn-mpv's build.rs) dlopens libclang at
-          # build time. The mingw-w64-clang-*-llvm package ships
-          # libclang.dll under the msystem prefix's bin/; cmd.exe
-          # doesn't pick that up from setup-msys2, so point bindgen
-          # at it explicitly.
-          LIBCLANG_PATH: C:\msys64\${{ matrix.msystem }}\bin
+          # Set by the libclang setup step above.
           MSYS_BIN: C:\msys64\${{ matrix.msystem }}\bin
           # mingw's libclang doesn't auto-pick the MSVC target triple, so
           # MSVC's arch-specific headers (__int64, vcruntime intrinsics,
