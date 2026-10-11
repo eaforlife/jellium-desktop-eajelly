@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.2.0
+
+- Integrated upstream lifecycle, rendering, input, and dependency updates.
+- Added an app-owned picture-in-picture button independent of Jellyfin CSS.
+- Reduced injected UI work by keeping PiP control state in one lightweight update path.
+
 ## 3.1.2-eajelly
 
 - Fixed Windows PiP/miniplayer staying behind fullscreen games after using playback controls.

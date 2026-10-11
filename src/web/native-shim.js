@@ -418,6 +418,7 @@
         }
     };
     let pictureInPictureCloseHost = null;
+    let pictureInPictureButton = null;
     let videoOsdVisible = false;
 
     function isPictureInPictureControl(node) {
@@ -454,10 +455,39 @@
     function updatePictureInPictureUi() {
         document.documentElement.classList.toggle('jmp-pip-active', window._isPictureInPicture);
         if (window._isPictureInPicture) markPictureInPictureControls(document);
+        if (pictureInPictureButton) {
+            pictureInPictureButton.hidden = !videoOsdVisible;
+            pictureInPictureButton.title = window._isPictureInPicture
+                ? 'Exit picture-in-picture' : 'Picture-in-picture';
+            pictureInPictureButton.setAttribute('aria-label', pictureInPictureButton.title);
+        }
         if (pictureInPictureCloseHost) {
             pictureInPictureCloseHost.dataset.visible =
                 window._isPictureInPicture && videoOsdVisible ? '1' : '0';
         }
+    }
+
+    function buildPictureInPictureButton() {
+        if (pictureInPictureButton) return;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.hidden = true;
+        button.className = 'jmp-pip-button';
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const player = window._mpvVideoPlayerInstance;
+            if (player && typeof player.setPictureInPictureEnabled === 'function') {
+                player.setPictureInPictureEnabled(!window._isPictureInPicture);
+            }
+        });
+        button.style.cssText = 'position:fixed;right:16px;bottom:72px;z-index:2147483646;' +
+            'width:40px;height:40px;border:0;border-radius:4px;background:rgba(20,20,20,.82);' +
+            'color:#fff;cursor:pointer;font:18px sans-serif;box-shadow:0 1px 4px #0008;';
+        button.textContent = '▣';
+        pictureInPictureButton = button;
+        document.body.appendChild(button);
+        updatePictureInPictureUi();
     }
 
     function buildPictureInPictureCloseButton() {
@@ -559,7 +589,7 @@
             window.api.system.openExternalUrl(info.url);
         },
         openClientSettings() {
-            window._openClientSettings();
+            window.jmpNative.openClientSettings();
         },
         openAbout() {
             window.jmpNative.openAbout();
@@ -654,6 +684,7 @@
         style.textContent = css;
         document.head.appendChild(style);
 
+        buildPictureInPictureButton();
         buildPictureInPictureCloseButton();
         markPictureInPictureControls(document);
         new MutationObserver((mutations) => {
