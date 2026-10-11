@@ -4,47 +4,14 @@
 //! actually requested.
 
 use clap::{ArgAction, Parser};
-use std::ffi::{OsStr, OsString};
-use std::path::PathBuf;
 
 const ENV_LOG_LEVEL: &str = "JELLIUM_DESKTOP_LOG_LEVEL";
 const ENV_LOG_FILE: &str = "JELLIUM_DESKTOP_LOG_FILE";
-pub(crate) const ENV_CONFIG_DIR: &str = "JELLIUM_DESKTOP_CONFIG_DIR";
-pub(crate) const ENV_CACHE_DIR: &str = "JELLIUM_DESKTOP_CACHE_DIR";
+const ENV_CONFIG_DIR: &str = "JELLIUM_DESKTOP_CONFIG_DIR";
+const ENV_CACHE_DIR: &str = "JELLIUM_DESKTOP_CACHE_DIR";
 
 #[cfg(test)]
 const ENV_BACKED: &[&str] = &[ENV_LOG_LEVEL, ENV_LOG_FILE, ENV_CONFIG_DIR, ENV_CACHE_DIR];
-
-fn path_overrides_from_args(
-    args: impl IntoIterator<Item = OsString>,
-) -> (Option<PathBuf>, Option<PathBuf>) {
-    let mut config = None;
-    let mut cache = None;
-    let mut args = args.into_iter().skip(1);
-    while let Some(arg) = args.next() {
-        if arg == OsStr::new("--config-dir") {
-            config = args.next().map(PathBuf::from);
-        } else if arg == OsStr::new("--cache-dir") {
-            cache = args.next().map(PathBuf::from);
-        } else if let Some(value) = arg.to_string_lossy().strip_prefix("--config-dir=") {
-            config = Some(PathBuf::from(value));
-        } else if let Some(value) = arg.to_string_lossy().strip_prefix("--cache-dir=") {
-            cache = Some(PathBuf::from(value));
-        }
-    }
-    (config, cache)
-}
-
-/// Read only the path switches before CEF decides whether this process is the
-/// browser or a Chromium subprocess. The full clap parse cannot run yet
-/// because renderer processes also receive Chromium-only switches.
-pub(crate) fn early_path_overrides() -> (Option<PathBuf>, Option<PathBuf>) {
-    let (config, cache) = path_overrides_from_args(std::env::args_os());
-    (
-        config.or_else(|| std::env::var_os(ENV_CONFIG_DIR).map(PathBuf::from)),
-        cache.or_else(|| std::env::var_os(ENV_CACHE_DIR).map(PathBuf::from)),
-    )
-}
 
 /// jellium-desktop — Jellyfin native desktop client.
 ///
@@ -95,17 +62,13 @@ pub struct Cli {
     #[arg(long)]
     pub audio_channels: Option<String>,
 
-    /// Chrome remote debugging port.
+    /// Chrome remote debugging port: 1024..=65535, or 0 to disable.
     #[arg(long)]
-    pub remote_debug_port: Option<i32>,
+    pub remote_debug_port: Option<jfn_cef::DebuggingPort>,
 
     /// Disable CEF GPU compositing.
     #[arg(long, action = ArgAction::SetTrue)]
     pub disable_gpu_compositing: bool,
-
-    /// Show the server address field before login.
-    #[arg(long, action = ArgAction::SetTrue)]
-    pub server_override: bool,
 
     #[cfg(target_os = "linux")]
     #[command(flatten)]
@@ -209,37 +172,6 @@ mod tests {
     }
 
     #[test]
-    fn early_path_parse_tolerates_chromium_switches() {
-        let args = [
-            "app",
-            "--type=renderer",
-            "--config-dir=C:\\test-config",
-            "--cache-dir",
-            "C:\\test-cache",
-            "--cef-unrelated=value",
-        ]
-        .map(OsString::from);
-        let (config, cache) = path_overrides_from_args(args);
-        assert_eq!(config, Some(PathBuf::from(r"C:\test-config")));
-        assert_eq!(cache, Some(PathBuf::from(r"C:\test-cache")));
-    }
-
-    #[test]
-    fn early_path_parse_uses_last_override() {
-        let args = [
-            "app",
-            "--config-dir=first",
-            "--config-dir",
-            "second",
-            "--cache-dir=cache",
-        ]
-        .map(OsString::from);
-        let (config, cache) = path_overrides_from_args(args);
-        assert_eq!(config, Some(PathBuf::from("second")));
-        assert_eq!(cache, Some(PathBuf::from("cache")));
-    }
-
-    #[test]
     fn log_file_explicit_empty() {
         assert_eq!(ok(&["app", "--log-file", ""]).log_file.as_deref(), Some(""));
     }
@@ -248,7 +180,10 @@ mod tests {
     fn equals_form() {
         let a = ok(&["app", "--hwdec=vaapi", "--remote-debug-port=9222"]);
         assert_eq!(a.hwdec.as_deref(), Some("vaapi"));
-        assert_eq!(a.remote_debug_port, Some(9222));
+        assert_eq!(
+            a.remote_debug_port,
+            "9222".parse::<jfn_cef::DebuggingPort>().ok()
+        );
     }
 
     #[test]
@@ -256,20 +191,13 @@ mod tests {
         let a = ok(&["app"]);
         assert!(!a.audio_exclusive);
         assert!(!a.disable_gpu_compositing);
-        assert!(!a.server_override);
     }
 
     #[test]
     fn bool_flags_set() {
-        let a = ok(&[
-            "app",
-            "--audio-exclusive",
-            "--disable-gpu-compositing",
-            "--server-override",
-        ]);
+        let a = ok(&["app", "--audio-exclusive", "--disable-gpu-compositing"]);
         assert!(a.audio_exclusive);
         assert!(a.disable_gpu_compositing);
-        assert!(a.server_override);
     }
 
     #[test]
@@ -286,7 +214,6 @@ mod tests {
         assert!(a.cache_dir.is_none());
         assert!(!a.audio_exclusive);
         assert!(!a.disable_gpu_compositing);
-        assert!(!a.server_override);
         assert!(a.remote_debug_port.is_none());
         #[cfg(target_os = "linux")]
         {
@@ -303,6 +230,17 @@ mod tests {
     #[test]
     fn missing_trailing_value_is_error() {
         assert!(try_parse(&["app", "--log-level"]).is_err());
+    }
+
+    #[test]
+    fn remote_debug_port_range_is_validated() {
+        for value in ["1", "1023", "65536", "-1"] {
+            assert!(try_parse(&["app", &format!("--remote-debug-port={value}")]).is_err());
+        }
+        assert_eq!(
+            ok(&["app", "--remote-debug-port=0"]).remote_debug_port,
+            Some(jfn_cef::DebuggingPort::Disabled)
+        );
     }
 
     #[test]
@@ -338,7 +276,10 @@ mod tests {
         assert_eq!(a.cache_dir.as_deref(), Some("/tmp/cache"));
         assert_eq!(a.audio_passthrough.as_deref(), Some("ac3,dts-hd"));
         assert_eq!(a.audio_channels.as_deref(), Some("5.1"));
-        assert_eq!(a.remote_debug_port, Some(9222));
+        assert_eq!(
+            a.remote_debug_port,
+            "9222".parse::<jfn_cef::DebuggingPort>().ok()
+        );
     }
 
     #[test]
@@ -407,7 +348,7 @@ mod tests {
     // links them to the consts, so guard the drift here.
     #[test]
     fn const_defaults_match_help_text() {
-        assert_eq!(jfn_mpv::HWDEC_DEFAULT, "auto");
+        assert_eq!(jfn_config::HWDEC_DEFAULT, "no");
         assert_eq!(crate::app::DEFAULT_LOG_FILTER, "info");
     }
 }

@@ -17,12 +17,11 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::thread::{self, JoinHandle};
 
-pub mod hardware_decode;
+mod hardware_decode;
+pub use hardware_decode::{HWDEC_DEFAULT, Hwdec, UnknownHwdec, hwdec_options};
 
 const DEVICE_NAME_MAX: usize = 64;
-const HWDEC_DEFAULT: &str = "auto";
 pub const PUBLIC_SERVER_URL: &str = "https://eajelly.xyz";
-pub const FALLBACK_SERVER_URL: &str = "http://eajelly.xyz";
 
 #[derive(Clone, Copy, Debug)]
 pub struct JfnWindowGeometry {
@@ -32,7 +31,6 @@ pub struct JfnWindowGeometry {
     pub height: i32,
     pub logical_width: i32,
     pub logical_height: i32,
-    pub scale: f32,
     pub maximized: bool,
 }
 
@@ -45,7 +43,6 @@ impl Default for JfnWindowGeometry {
             height: 0,
             logical_width: 0,
             logical_height: 0,
-            scale: 0.0,
             maximized: false,
         }
     }
@@ -53,7 +50,8 @@ impl Default for JfnWindowGeometry {
 
 #[derive(Clone, Debug)]
 struct SettingsData {
-    hwdec: String,
+    server_url: String,
+    hwdec: Hwdec,
     audio_passthrough: String,
     audio_channels: String,
     log_level: String,
@@ -70,7 +68,8 @@ struct SettingsData {
 impl Default for SettingsData {
     fn default() -> Self {
         Self {
-            hwdec: String::new(),
+            server_url: String::new(),
+            hwdec: Hwdec::default(),
             audio_passthrough: String::new(),
             audio_channels: String::new(),
             log_level: String::new(),
@@ -92,6 +91,9 @@ impl Default for SettingsData {
 #[serde(rename_all = "camelCase", default)]
 struct SettingsFile {
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    server_url: Option<String>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     window_width: Option<i32>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
@@ -103,11 +105,6 @@ struct SettingsFile {
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     window_logical_height: Option<i32>,
 
-    // f64 on the wire: the stored value is an f32, and widening before
-    // formatting keeps the digits identical to files written so far.
-    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
-    window_scale: Option<f64>,
-
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     window_x: Option<i32>,
 
@@ -118,7 +115,7 @@ struct SettingsFile {
     window_maximized: Option<bool>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
-    hwdec: Option<String>,
+    hwdec: Option<Hwdec>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     audio_passthrough: Option<String>,
@@ -196,8 +193,7 @@ where
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CliSettings<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    hwdec: Option<&'a str>,
+    hwdec: Hwdec,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     audio_passthrough: Option<&'a str>,
@@ -226,11 +222,14 @@ struct CliSettings<'a> {
 
     device_name_default: String,
 
-    hwdec_options: &'a [&'a str],
+    hwdec_options: &'static [&'static str],
 }
 
 impl SettingsData {
     fn overlay(&mut self, file: SettingsFile) {
+        if let Some(v) = file.server_url {
+            self.server_url = v;
+        }
         if let Some(v) = file.hwdec {
             self.hwdec = v;
         }
@@ -258,9 +257,6 @@ impl SettingsData {
         }
         if let Some(v) = file.window_logical_height {
             self.window.logical_height = v;
-        }
-        if let Some(v) = file.window_scale {
-            self.window.scale = v as f32;
         }
         if let Some(v) = file.window_x {
             self.window.x = v;
@@ -296,16 +292,15 @@ impl SettingsData {
         let logical = self.window.logical_width > 0 && self.window.logical_height > 0;
         let position = self.window.x >= 0 && self.window.y >= 0;
         SettingsFile {
+            server_url: Some(self.server_url.clone()),
             window_width: size.then_some(self.window.width),
             window_height: size.then_some(self.window.height),
             window_logical_width: logical.then_some(self.window.logical_width),
             window_logical_height: logical.then_some(self.window.logical_height),
-            window_scale: (self.window.scale > 0.0).then(|| f64::from(self.window.scale)),
             window_x: position.then_some(self.window.x),
             window_y: position.then_some(self.window.y),
             window_maximized: Some(self.window.maximized),
-            hwdec: (!self.hwdec.is_empty() && self.hwdec != HWDEC_DEFAULT)
-                .then(|| self.hwdec.clone()),
+            hwdec: (self.hwdec != Hwdec::default()).then_some(self.hwdec),
             audio_passthrough: (!self.audio_passthrough.is_empty())
                 .then(|| self.audio_passthrough.clone()),
             audio_exclusive: self.audio_exclusive.then_some(true),
@@ -320,9 +315,9 @@ impl SettingsData {
         }
     }
 
-    fn cli_json(&self, hwdec_opts: &[&str]) -> String {
+    fn cli_json(&self) -> String {
         let view = CliSettings {
-            hwdec: (!self.hwdec.is_empty()).then_some(self.hwdec.as_str()),
+            hwdec: self.hwdec,
             audio_passthrough: (!self.audio_passthrough.is_empty())
                 .then_some(self.audio_passthrough.as_str()),
             audio_exclusive: self.audio_exclusive.then_some(true),
@@ -335,7 +330,7 @@ impl SettingsData {
             hide_scrollbar: self.hide_scrollbar,
             device_name: (!self.device_name.is_empty()).then_some(self.device_name.as_str()),
             device_name_default: default_device_name(),
-            hwdec_options: hwdec_opts,
+            hwdec_options: hwdec_options(),
         };
         serde_json::to_string(&view).unwrap_or_default()
     }
@@ -513,29 +508,24 @@ macro_rules! bool_accessors {
     };
 }
 
-string_accessors!(hwdec, set_hwdec, hwdec);
+/// Normal launches use the fork's fixed service endpoint. The setters remain
+/// as IPC compatibility shims for older web UI code.
+pub fn server_url() -> String {
+    PUBLIC_SERVER_URL.to_owned()
+}
+
+pub fn set_server_url(_value: &str) {}
+
+pub fn hwdec() -> Hwdec {
+    state().lock().data.hwdec
+}
+
+pub fn set_hwdec(v: Hwdec) {
+    state().lock().data.hwdec = v;
+}
 string_accessors!(audio_passthrough, set_audio_passthrough, audio_passthrough);
 string_accessors!(audio_channels, set_audio_channels, audio_channels);
 string_accessors!(log_level, set_log_level, log_level);
-
-/// Normal launches are permanently bound to the eajelly server. The optional
-/// server-override overlay navigates the browser directly for that session,
-/// so an older settings.json can never change the normal startup target.
-pub fn server_url() -> String {
-    PUBLIC_SERVER_URL.to_string()
-}
-
-/// Return the insecure fallback only when the fixed HTTPS server root failed.
-/// CEF canonicalizes a bare origin with a trailing slash, so accept both forms
-/// while refusing to downgrade failures on arbitrary server paths.
-pub fn server_fallback_url(failed_url: &str) -> Option<&'static str> {
-    (failed_url == PUBLIC_SERVER_URL || failed_url.strip_suffix('/') == Some(PUBLIC_SERVER_URL))
-        .then_some(FALLBACK_SERVER_URL)
-}
-
-/// Retained for IPC compatibility with older jellyfin-web code. Server
-/// changes are intentionally ignored in this single-server build.
-pub fn set_server_url(_value: &str) {}
 
 pub fn device_name() -> String {
     state().lock().data.device_name.clone()
@@ -598,7 +588,7 @@ pub fn configured_window_decorations() -> Option<WindowDecorations> {
 /// if absent.
 pub fn window_decorations_mode() -> WindowDecorations {
     let configured = state().lock().data.window_decorations;
-    unsafe { jfn_platform_abi::get() }.resolve_window_decorations(configured)
+    jfn_platform_abi::resolve_window_decorations(configured)
 }
 
 pub fn window_decorations() -> String {
@@ -625,9 +615,9 @@ pub fn set_window_geometry(g: JfnWindowGeometry) {
     state().lock().data.window = g;
 }
 
-pub fn cli_json(hwdec_opts: &[&str]) -> String {
+pub fn cli_json() -> String {
     let snap = state().lock().data.clone();
-    snap.cli_json(hwdec_opts)
+    snap.cli_json()
 }
 
 fn normalize_device_name(raw: &str, platform_default: &str) -> String {
@@ -660,8 +650,7 @@ fn normalize_device_name(raw: &str, platform_default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        HWDEC_DEFAULT, SettingsData, SettingsFile, WindowDecorations, default_device_name,
-        normalize_device_name,
+        SettingsData, SettingsFile, WindowDecorations, default_device_name, normalize_device_name,
     };
 
     const PLATFORM: &str = "platform-host";
@@ -707,39 +696,16 @@ mod tests {
     }
 
     #[test]
-    fn default_settings_write_only_maximized() {
+    fn default_settings_write_only_server_url_and_maximized() {
         let text = serde_json::to_string(&SettingsData::default().to_file()).expect("serializes");
-        assert_eq!(text, r#"{"windowMaximized":false}"#);
-    }
-
-    #[test]
-    fn hardware_decoder_selection_round_trips() {
-        for mode in ["d3d11va", "nvdec-copy", "no"] {
-            let data = loaded(&format!(r#"{{"hwdec":"{mode}"}}"#));
-            assert_eq!(data.hwdec, mode);
-
-            let text = serde_json::to_string(&data.to_file()).expect("serializes");
-            assert!(text.contains(&format!(r#""hwdec":"{mode}""#)));
-            assert_eq!(loaded(&text).hwdec, mode);
-        }
-    }
-
-    #[test]
-    fn default_hardware_decoder_is_omitted_from_disk() {
-        let data = SettingsData {
-            hwdec: HWDEC_DEFAULT.into(),
-            ..SettingsData::default()
-        };
-        let file = data.to_file();
-
-        assert_eq!(HWDEC_DEFAULT, "auto");
-        assert!(file.hwdec.is_none());
+        assert_eq!(text, r#"{"serverUrl":"","windowMaximized":false}"#);
     }
 
     #[test]
     fn every_key_writes_in_schema_order() {
         let data = SettingsData {
-            hwdec: "vaapi".into(),
+            server_url: "http://host".into(),
+            hwdec: "auto".parse().expect("auto is offered everywhere"),
             audio_passthrough: "eac3".into(),
             audio_channels: "stereo".into(),
             log_level: "debug".into(),
@@ -751,7 +717,6 @@ mod tests {
                 height: 4,
                 logical_width: 5,
                 logical_height: 6,
-                scale: 1.5,
                 maximized: true,
             },
             audio_exclusive: true,
@@ -765,11 +730,11 @@ mod tests {
         assert_eq!(
             keys(&text),
             [
+                "serverUrl",
                 "windowWidth",
                 "windowHeight",
                 "windowLogicalWidth",
                 "windowLogicalHeight",
-                "windowScale",
                 "windowX",
                 "windowY",
                 "windowMaximized",
@@ -787,30 +752,29 @@ mod tests {
             ]
         );
         assert!(text.contains(r#""windowDecorations":"serverThemed""#));
-        assert!(text.contains(r#""windowScale":1.5"#));
     }
 
     #[test]
     fn absent_keys_leave_defaults() {
         let data = loaded(r#"{"serverUrl":"http://host"}"#);
+        assert_eq!(data.server_url, "http://host");
         assert!(data.transparent_titlebar);
         assert!(data.hide_scrollbar);
         assert_eq!(data.window.x, -1);
-        assert_eq!(super::server_url(), super::PUBLIC_SERVER_URL);
     }
 
     #[test]
-    fn server_fallback_only_downgrades_the_https_root() {
-        assert_eq!(
-            super::server_fallback_url("https://eajelly.xyz"),
-            Some(super::FALLBACK_SERVER_URL)
-        );
-        assert_eq!(
-            super::server_fallback_url("https://eajelly.xyz/"),
-            Some(super::FALLBACK_SERVER_URL)
-        );
-        assert_eq!(super::server_fallback_url("https://eajelly.xyz/web/"), None);
-        assert_eq!(super::server_fallback_url("http://eajelly.xyz"), None);
+    fn transparent_titlebar_false_round_trips_and_true_is_omitted() {
+        let false_data = loaded(r#"{"transparentTitlebar":false}"#);
+        assert!(!false_data.transparent_titlebar);
+        let false_json = serde_json::to_string(&false_data.to_file()).expect("serializes");
+        assert!(false_json.contains(r#""transparentTitlebar":false"#));
+        assert!(!loaded(&false_json).transparent_titlebar);
+
+        let true_json =
+            serde_json::to_string(&SettingsData::default().to_file()).expect("serializes");
+        assert!(!true_json.contains("transparentTitlebar"));
+        assert!(loaded(&true_json).transparent_titlebar);
     }
 
     #[test]
@@ -818,12 +782,14 @@ mod tests {
         let data = loaded(r#"{"windowWidth":"wide","serverUrl":"http://host","hideScrollbar":7}"#);
         assert_eq!(data.window.width, 0);
         assert!(data.hide_scrollbar);
+        assert_eq!(data.server_url, "http://host");
     }
 
     #[test]
     fn unknown_keys_and_unknown_decorations_are_ignored() {
         let data = loaded(r#"{"nope":1,"windowDecorations":"fancy","serverUrl":"u"}"#);
         assert_eq!(data.window_decorations, None);
+        assert_eq!(data.server_url, "u");
     }
 
     #[test]
@@ -841,12 +807,11 @@ mod tests {
     #[test]
     fn cli_json_emits_the_web_ui_contract() {
         let data = SettingsData {
-            hwdec: "vaapi".into(),
             transparent_titlebar: false,
             device_name: "box".into(),
             ..SettingsData::default()
         };
-        let text = data.cli_json(&["no", "auto"]);
+        let text = data.cli_json();
         assert_eq!(
             keys(&text),
             [
@@ -859,7 +824,8 @@ mod tests {
                 "hwdecOptions",
             ]
         );
-        assert!(text.contains(r#""hwdecOptions":["no","auto"]"#));
+        let options = serde_json::to_string(super::hwdec_options()).expect("serializes");
+        assert!(text.contains(&format!(r#""hwdecOptions":{options}"#)));
         assert!(text.contains(&format!(
             r#""deviceNameDefault":"{}""#,
             default_device_name()
