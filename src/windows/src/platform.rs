@@ -76,7 +76,17 @@ pub(crate) fn win_ensure_hwnd() -> Option<HWND> {
     if let Some(hwnd) = win_hwnd() {
         return Some(hwnd);
     }
-    let raw = jfn_playback::ingest_driver::jfn_playback_window_id()? as usize;
+    // The property observation is asynchronous. During startup, platform
+    // initialization can run before the first observation event reaches the
+    // playback ingest state, even though mpv has already created its native
+    // window. Read the property synchronously as a startup fallback; later
+    // changes continue to arrive through the normal observation path.
+    let raw = jfn_playback::ingest_driver::jfn_playback_window_id().or_else(|| {
+        let mut id = 0_i64;
+        let result =
+            unsafe { jfn_mpv::api::jfn_mpv_get_property_int(c"window-id".as_ptr(), &mut id) };
+        (result >= 0 && id > 0).then_some(id)
+    })? as usize;
     if raw == 0 {
         return None;
     }
