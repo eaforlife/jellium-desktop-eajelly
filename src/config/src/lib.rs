@@ -596,7 +596,7 @@ pub fn configured_window_decorations() -> Option<WindowDecorations> {
 /// if absent.
 pub fn window_decorations_mode() -> WindowDecorations {
     let configured = state().lock().data.window_decorations;
-    jfn_platform_abi::get().resolve_window_decorations(configured)
+    unsafe { jfn_platform_abi::get() }.resolve_window_decorations(configured)
 }
 
 pub fn window_decorations() -> String {

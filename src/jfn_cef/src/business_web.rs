@@ -302,7 +302,7 @@ fn handle_message(message: BrowserMessage) -> bool {
     match message.name() {
         "playerLoad" => with_args(args, handle_player_load),
         "playerStop" => {
-            jfn_platform_abi::get().set_picture_in_picture(false, 1.0);
+            unsafe { jfn_platform_abi::get() }.set_picture_in_picture(false, 1.0);
             jfn_mpv_stop();
             true
         }
@@ -375,11 +375,11 @@ fn handle_message(message: BrowserMessage) -> bool {
             if active {
                 st.was_fullscreen_before_osd = jfn_playback_fullscreen();
             } else if !st.was_fullscreen_before_osd {
-                jfn_platform_abi::get().set_fullscreen(false);
+                unsafe { jfn_platform_abi::get() }.set_fullscreen(false);
             }
         }),
         "toggleFullscreen" => {
-            jfn_platform_abi::get().toggle_fullscreen();
+            unsafe { jfn_platform_abi::get() }.toggle_fullscreen();
             true
         }
         "setPictureInPicture" => with_args(args, |a| {
@@ -389,7 +389,7 @@ fn handle_message(message: BrowserMessage) -> bool {
             } else {
                 16.0 / 9.0
             };
-            jfn_platform_abi::get().set_picture_in_picture(enabled, aspect_ratio);
+            unsafe { jfn_platform_abi::get() }.set_picture_in_picture(enabled, aspect_ratio);
         }),
         "openAbout" => {
             crate::business_about::jfn_about_open();

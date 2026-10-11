@@ -17,7 +17,7 @@ use crate::cli;
 // Shorthand for the installed Platform backend. `install()` happens before
 // any of the call sites here run.
 fn plat() -> &'static dyn Platform {
-    jfn_platform_abi::get()
+    unsafe { jfn_platform_abi::get() }
 }
 
 // Read once by `jfn_app_main` after CEF boot to seed the theme rotator.
