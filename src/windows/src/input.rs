@@ -23,31 +23,29 @@ use windows::Win32::UI::HiDpi::{
     GetAwarenessFromDpiAwarenessContext, GetThreadDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetFocus, VK_ADD, VK_BROWSER_BACK, VK_BROWSER_FORWARD, VK_CAPITAL,
-    VK_CLEAR, VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_F4, VK_HOME,
-    VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_MULTIPLY, VK_NEXT,
-    VK_NUMLOCK, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6,
-    VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU,
-    VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_SUBTRACT, VK_UP,
+    GetKeyState, MAPVK_VK_TO_CHAR, MapVirtualKeyW, SetFocus, VK_ADD, VK_BROWSER_BACK,
+    VK_BROWSER_FORWARD, VK_CAPITAL, VK_CLEAR, VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE,
+    VK_DOWN, VK_END, VK_F4, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN,
+    VK_MENU, VK_MULTIPLY, VK_NEXT, VK_NUMLOCK, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3,
+    VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_PRIOR, VK_RCONTROL,
+    VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_SUBTRACT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
-    GetParent, GetWindowThreadProcessId, HCURSOR, HICON, HMENU, HTCAPTION, HTCLIENT,
-    IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_SIZEALL,
-    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, KF_EXTENDED, LoadCursorW, MSG,
-    PostMessageW, PostThreadMessageW, RegisterClassExW, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOZORDER, SendMessageW, SetCursor, SetWindowPos, TranslateMessage,
-    UnregisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_APPCOMMAND, WM_CHAR, WM_KEYDOWN,
-    WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK,
-    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCLBUTTONDOWN,
-    WM_QUIT, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SYSCHAR,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_CHILD, WS_VISIBLE,
-    XBUTTON2,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GA_ROOT, GetAncestor,
+    GetClientRect, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, HCURSOR, HICON,
+    HMENU, HTCLIENT, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO,
+    IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, KF_EXTENDED,
+    LoadCursorW, MSG, PostMessageW, PostThreadMessageW, RegisterClassExW, SET_WINDOW_POS_FLAGS,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetCursor, SetWindowPos, TranslateMessage,
+    UnregisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APPCOMMAND, WM_CHAR, WM_KEYDOWN, WM_KEYUP,
+    WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN,
+    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDBLCLK,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SYSCHAR, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_CHILD, WS_VISIBLE, XBUTTON2,
 };
 use windows::core::{PCWSTR, w};
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
-const WM_JFN_START_MOVE: u32 = WM_APP + 0x102;
 
 use jfn_input::buttons::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT};
 use jfn_platform_abi::cursor::CursorShape;
@@ -59,10 +57,11 @@ use jfn_platform_abi::event_flags::{
 };
 use jfn_platform_abi::{LogicalPoint, PhysicalPoint};
 
+use jfn_input::key::{KeyReport, PhysicalKey};
 use jfn_input::{
-    jfn_input_dispatch_char_sys, jfn_input_dispatch_history_nav, jfn_input_dispatch_key_full,
-    jfn_input_dispatch_keyboard_focus, jfn_input_dispatch_mouse_button,
-    jfn_input_dispatch_mouse_move, jfn_input_dispatch_scroll,
+    jfn_input_dispatch_history_nav, jfn_input_dispatch_key, jfn_input_dispatch_keyboard_focus,
+    jfn_input_dispatch_mouse_button, jfn_input_dispatch_mouse_move, jfn_input_dispatch_scroll,
+    jfn_input_dispatch_utf16,
 };
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 
@@ -114,6 +113,34 @@ fn get_xbutton_wparam(wp: WPARAM) -> u16 {
 #[inline]
 fn get_appcommand_lparam(lp: LPARAM) -> u16 {
     (hiword_i16(lp.0 as u32) as u16) & 0x7FFF
+}
+
+/// The physical key `lparam` names: the scancode, `0xE0`-prefixed when the
+/// extended bit is set.
+fn physical_key(lparam: LPARAM) -> PhysicalKey {
+    let scancode = ((lparam.0 >> 16) as u32 & 0xff) as u16;
+    let extended = ((lparam.0 >> 16) as u32 & KF_EXTENDED) != 0;
+    PhysicalKey::Windows(if extended {
+        0xE000 | scancode
+    } else {
+        scancode
+    })
+}
+
+/// The character `vk` produces with no modifier applied, through
+/// `MapVirtualKeyW(MAPVK_VK_TO_CHAR)` with the dead-key bit cleared.
+fn logical_char(vk: u16) -> Option<char> {
+    let mapped = unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_CHAR) };
+    // The high bit marks a dead key; the character it names is still the one
+    // the key produces.
+    jfn_input::key::logical_char(mapped & 0x7fff_ffff)
+}
+
+/// Whether the input window's top-level ancestor is the foreground window.
+/// A menu's tracking loop leaves it unchanged.
+fn toplevel_active(hwnd: HWND) -> bool {
+    let toplevel = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    !toplevel.is_invalid() && toplevel == unsafe { GetForegroundWindow() }
 }
 
 #[inline]
@@ -269,8 +296,7 @@ fn is_button_down(msg: u32) -> bool {
 /// the extent `crate::window` last sampled. The identity before the first
 /// sample exists.
 fn view_point(x: i32, y: i32) -> LogicalPoint {
-    let physical = PhysicalPoint { x, y };
-    crate::window::client_extent().map_or(LogicalPoint { x, y }, |e| e.to_logical_point(physical))
+    crate::scale::view_point(crate::window::client_extent(), PhysicalPoint { x, y })
 }
 
 /// One debug line per press.
@@ -286,7 +312,7 @@ fn log_press(msg: u32, physical: PhysicalPoint, logical: LogicalPoint) {
         "press msg=0x{msg:04x} physical=({},{}) logical=({},{}) \
          extent=logical {}x{} physical {}x{} scale {}",
         physical.x, physical.y, logical.x, logical.y,
-        logical_size.w, logical_size.h, physical_size.w, physical_size.h, scale.0,
+        logical_size.w, logical_size.h, physical_size.w, physical_size.h, scale,
     );
 }
 
@@ -403,24 +429,26 @@ unsafe extern "system" fn input_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
             }
             let pressed = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
             let is_sys = msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP;
-            jfn_input_dispatch_key_full(
-                if pressed { 1 } else { 0 },
-                vk as i32,
-                lp.0 as i32,
-                keyboard_modifiers(wp, lp),
-                0,
-                0,
-                if is_sys { 1 } else { 0 },
-            );
+            jfn_input_dispatch_key(KeyReport {
+                pressed,
+                modifiers: keyboard_modifiers(wp, lp),
+                windows_key_code: vk as i32,
+                native_key_code: lp.0 as i32,
+                is_system_key: is_sys,
+                character: 0,
+                unmodified_character: 0,
+                logical: logical_char(vk),
+                physical: physical_key(lp),
+            });
             return LRESULT(0);
         }
 
         WM_CHAR | WM_SYSCHAR => {
-            jfn_input_dispatch_char_sys(
-                wp.0 as u32,
+            jfn_input_dispatch_utf16(
+                wp.0 as u16,
                 keyboard_modifiers(wp, lp),
                 lp.0 as u32,
-                if msg == WM_SYSCHAR { 1 } else { 0 },
+                msg == WM_SYSCHAR,
             );
             return LRESULT(0);
         }
@@ -430,27 +458,8 @@ unsafe extern "system" fn input_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
             return LRESULT(0);
         }
 
-        WM_JFN_START_MOVE => {
-            let _ = unsafe { ReleaseCapture() };
-            if let Ok(parent) = unsafe { GetParent(hwnd) } {
-                unsafe {
-                    SendMessageW(
-                        parent,
-                        WM_NCLBUTTONDOWN,
-                        Some(WPARAM(HTCAPTION as usize)),
-                        Some(LPARAM(0)),
-                    );
-                }
-            }
-            return LRESULT(0);
-        }
-
-        WM_SETFOCUS => {
-            jfn_input_dispatch_keyboard_focus(1);
-            return LRESULT(0);
-        }
-        WM_KILLFOCUS => {
-            jfn_input_dispatch_keyboard_focus(0);
+        WM_SETFOCUS | WM_KILLFOCUS => {
+            jfn_input_dispatch_keyboard_focus(c_int::from(toplevel_active(hwnd)));
             return LRESULT(0);
         }
 
@@ -557,16 +566,6 @@ pub(crate) fn jfn_input_windows_stop_input_thread() {
     if tid != 0 {
         let _ = unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)) };
     }
-}
-
-/// Start Windows' native interactive move loop on the input/window thread.
-pub(crate) fn jfn_input_windows_start_move() {
-    let hwnd_raw = STATE.lock().input_hwnd_raw;
-    if hwnd_raw == 0 {
-        return;
-    }
-    let hwnd = HWND(hwnd_raw as *mut _);
-    let _ = unsafe { PostMessageW(Some(hwnd), WM_JFN_START_MOVE, WPARAM(0), LPARAM(0)) };
 }
 
 pub(crate) fn jfn_input_windows_resize_to_parent(pw: c_int, ph: c_int) {
