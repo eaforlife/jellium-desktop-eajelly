@@ -2636,11 +2636,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "slotmap",
-<<<<<<< HEAD
  "ureq",
-=======
  "thiserror 2.0.20",
->>>>>>> upstream/main
 ]
 
 [[package]]
