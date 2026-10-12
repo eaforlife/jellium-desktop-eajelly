@@ -127,6 +127,10 @@ implemented by the platform backend. Keep playback-finished/canceled/error
 events clearing the browser PiP state, and test both entering and exiting PiP
 after a video ends.
 
+For the `windows` crate APIs, check the generated return type before writing
+error handling: APIs such as `SetWindowPos` return `Result<(), Error>` and
+must use `.is_ok()`/`?`, while BOOL-returning APIs expose `.as_bool()`.
+
 When changing release or updater code, test the packaged artifact—not only the
 workspace build—by opening About and by checking the automatic update prompt
 against a newer release. Record the release tag, asset names, workflow

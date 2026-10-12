@@ -217,7 +217,7 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
         }
-        .as_bool()
+        .is_ok()
         {
             return;
         }
