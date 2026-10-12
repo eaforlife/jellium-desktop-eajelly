@@ -125,6 +125,9 @@ impl SettingsOverlay {
 
     pub fn dismiss(&mut self) -> Outcome {
         let _ = self.settings.dismiss();
+        // Keep any legacy/web-injected settings route from remaining mounted
+        // underneath the native modal after the X button closes it.
+        jfn_playback::exec_js::call("window._nativeClientSettingsClosed?.();");
         Outcome::Dismiss
     }
 

@@ -611,6 +611,10 @@
             window.api.system.openExternalUrl(info.url);
         },
         openClientSettings() {
+            // The settings surface is native. If an older/server-side shim
+            // left its legacy page mounted, remove that route before opening
+            // the native surface so the two settings UIs cannot stack.
+            window._nativeClientSettingsClosed?.();
             window.jmpNative.openClientSettings();
         },
         openAbout() {
@@ -619,6 +623,14 @@
         getPlugins() {
             return plugins;
         }
+    };
+
+    // The native settings modal owns the visible settings UI. Older web
+    // integrations can still leave clientSettingsPage in the Jellyfin page
+    // stack; the native close path calls this to restore the player route.
+    window._nativeClientSettingsClosed = function() {
+        const page = document.getElementById('clientSettingsPage');
+        if (page) window.history.back();
     };
 
     // Device profile for direct play. Built in C++ at startup from mpv's
