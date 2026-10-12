@@ -135,6 +135,44 @@ pub unsafe fn jfn_mpv_set_property_string_async(name: *const c_char, value: *con
     }
 }
 
+/// Set a string-valued mpv option/property without exposing C-string
+/// lifetime details to application crates. This is intentionally asynchronous
+/// because settings updates can originate on the CEF or Iced UI threads.
+pub fn jfn_mpv_set_option_string(name: &str, value: &str) {
+    let (Ok(name), Ok(value)) = (CString::new(name), CString::new(value)) else {
+        tracing::warn!(target: "mpv", "ignoring option update containing a NUL byte");
+        return;
+    };
+    unsafe {
+        jfn_mpv_set_property_string_async(name.as_ptr(), value.as_ptr());
+    }
+}
+
+/// Set a boolean mpv option/property without exposing C-string lifetime
+/// details to application crates.
+pub fn jfn_mpv_set_option_flag(name: &str, value: bool) {
+    let Ok(name) = CString::new(name) else {
+        tracing::warn!(target: "mpv", "ignoring option update containing a NUL byte");
+        return;
+    };
+    unsafe {
+        jfn_mpv_set_property_flag_async(name.as_ptr(), value);
+    }
+}
+
+/// Apply settings that libmpv supports while it is running. Options that
+/// affect decoder/audio creation are also applied by the next media load via
+/// the normal boot path, so this remains correct when changed while idle.
+pub fn apply_runtime_setting(key: &str, value: &str) {
+    match key {
+        "hwdec" => jfn_mpv_set_option_string("hwdec", value),
+        "audioPassthrough" => jfn_mpv_set_option_string("audio-spdif", value),
+        "audioExclusive" => jfn_mpv_set_option_flag("audio-exclusive", value == "true"),
+        "audioChannels" => jfn_mpv_set_option_string("audio-channels", value),
+        _ => {}
+    }
+}
+
 /// Sync int property read. Writes the value into `*out` and returns
 /// libmpv's error code (0 on success, negative on failure). NULL `out`
 /// or missing handle returns `MPV_ERROR_INVALID_PARAMETER` (-4).

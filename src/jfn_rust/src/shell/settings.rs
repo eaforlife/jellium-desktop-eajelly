@@ -98,7 +98,7 @@ impl Settings {
         let log_level = jfn_config::log_level();
 
         let mut controls = column![
-            text("Changes take effect after restarting the application.").class(Some(theme::MUTED)),
+            text("Playback changes apply to the next media load; display changes apply immediately or after restart as noted.").class(Some(theme::MUTED)),
             self.group(SECTION_TITLES[0], column![self.selection(
                 "Hardware Decoding",
                 controls::select(
@@ -250,6 +250,7 @@ impl Settings {
         match message {
             Message::CommitAudioPassthrough => {
                 jfn_config::set_audio_passthrough(&self.audio_passthrough);
+                jfn_mpv::api::apply_runtime_setting("audioPassthrough", &self.audio_passthrough);
                 jfn_config::settings_save_async();
             }
             Message::CommitDeviceName => {
@@ -272,6 +273,7 @@ impl Settings {
             Message::HardwareDecodingChanged(value) => {
                 if let Ok(hwdec) = value.parse() {
                     jfn_config::set_hwdec(hwdec);
+                    jfn_mpv::api::apply_runtime_setting("hwdec", &value);
                 }
             }
             Message::AudioPassthroughEdited(value) => {
@@ -282,8 +284,14 @@ impl Settings {
                 self.commit_text(Message::CommitAudioPassthrough);
                 return Outcome::None;
             }
-            Message::ExclusiveAudioOutputChanged(value) => jfn_config::set_audio_exclusive(value),
-            Message::AudioChannelLayoutChanged(value) => jfn_config::set_audio_channels(&value),
+            Message::ExclusiveAudioOutputChanged(value) => {
+                jfn_config::set_audio_exclusive(value);
+                jfn_mpv::api::apply_runtime_setting("audioExclusive", &value.to_string());
+            }
+            Message::AudioChannelLayoutChanged(value) => {
+                jfn_config::set_audio_channels(&value);
+                jfn_mpv::api::apply_runtime_setting("audioChannels", &value);
+            }
             Message::ForceTranscodingChanged(value) => jfn_config::set_force_transcoding(value),
             Message::WindowDecorationsChanged(value) => {
                 jfn_config::set_window_decorations(value.map(WindowDecorations::as_str));

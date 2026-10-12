@@ -193,6 +193,9 @@ writing a justification for it is the failure mode, not the mitigation.
 
 ## mpv Integration
 - **Never call sync mpv API (`mpv_get_property`, etc.) from event callbacks** - causes deadlock during video init. Use property observation or async variants instead.
+- Settings that affect mpv must update both the persisted config and the live handle. Route live updates through `jfn_mpv::api::apply_runtime_setting`; boot options remain the fallback for the next process/media load.
+- On Windows, keep the decoder spellings aligned with mpv: `d3d11va` is the D3D11VA backend and `nvdec-copy` is the supported NVIDIA copy-back backend. Treat legacy `nvdec` as an input alias, not as a stored value.
+- A requested hardware decoder is not proof of GPU use. Verify mpv's `hwdec-current` after media load and log whether it selected hardware or fell back to software.
 
 ## mpv Event Flow
 mpv is the authoritative source of playback state. All state (position, speed, pause, seeking, etc.) flows from mpv property observations outward to the JS UI and OS media sessions. The JS UI and MPRIS/macOS media sessions are consumers — they never determine playback state, they only reflect what mpv reports. This means things like rate changes, seek completion, and position updates come from mpv, not from JS round-trips or manual bookkeeping.

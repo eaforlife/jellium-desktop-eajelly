@@ -25,7 +25,7 @@ const CURRENT_OS: TargetOs = TargetOs::Macos;
 pub fn hwdec_options() -> &'static [&'static str] {
     match CURRENT_OS {
         TargetOs::Linux => &["auto", "no", "vaapi", "nvdec", "vulkan"],
-        TargetOs::Windows => &["auto", "no", "d3d11va", "nvdec", "vulkan"],
+        TargetOs::Windows => &["auto", "no", "d3d11va", "nvdec-copy", "vulkan"],
         TargetOs::Macos => &["auto", "no", "videotoolbox", "vulkan"],
     }
 }
@@ -70,6 +70,12 @@ impl std::str::FromStr for Hwdec {
     type Err = UnknownHwdec;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
+        #[cfg(target_os = "windows")]
+        let value = if value == "nvdec" {
+            "nvdec-copy"
+        } else {
+            value
+        };
         hwdec_options()
             .iter()
             .find(|option| **option == value)
@@ -111,6 +117,15 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "'garbage' is not a hardware-decode mode this OS offers"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn migrates_legacy_nvdec_to_copy_backend() {
+        assert_eq!(
+            "nvdec".parse::<Hwdec>().ok().map(Hwdec::as_str),
+            Some("nvdec-copy")
         );
     }
 }
