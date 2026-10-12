@@ -79,6 +79,12 @@ the tree must be clean, the locked metadata check must pass, all relevant
 workflow filters must match the tag, and the affected platform artifacts must
 be buildable.
 
+Release tag names are always `vX.Y.Z-eajelly` (for example,
+`v3.2.1-eajelly`), including the leading `v`. The Cargo package version stays
+`X.Y.Z-eajelly` without the leading `v` because Cargo requires a valid SemVer
+value. Before tagging, confirm `cargo xtask version` matches the tag after
+removing only the leading `v`; never create the unprefixed tag variant.
+
 ## Update Detection and Release Propagation
 
 Release assets appearing on GitHub does not by itself prove that clients can
@@ -109,6 +115,17 @@ explicit `Jellium Desktop/<version>` token (plus the legacy compact token) in
 the CEF browser User-Agent so server JavaScript can identify the client and
 extract its version. Test `navigator.userAgent` in a packaged build; changing
 only the MPV User-Agent does not affect server JavaScript.
+
+## Token-Efficient Agent Workflow
+
+Start with `git status --short`, then use targeted `rg` searches and bounded
+file slices. Do not dump lockfiles, generated assets, or full workflow logs;
+inspect only the matching sections and relevant failure tail. Read the nearest
+implementation and its tests before broad repository exploration. Run the
+smallest relevant formatter, metadata check, test, or package build first;
+reserve full multi-platform builds for release validation. Summaries should
+record commands, pass/fail results, and remaining uncertainty without copying
+large tool outputs.
 
 ## Before Version Tags / Releases
 Before committing a new version or creating a release tag, run the same locked
