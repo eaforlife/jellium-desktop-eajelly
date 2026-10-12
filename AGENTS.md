@@ -105,6 +105,22 @@ The client update path has two separate contracts that must both be checked:
   Verify the URL prefix, SHA-256 digest, declared size, and installer `MZ`
   header before launch.
 
+Useful focused checks:
+
+```sh
+cargo metadata --format-version 1 --locked --manifest-path src/Cargo.toml
+cargo test --manifest-path src/Cargo.toml -p jfn-platform-abi --locked --lib
+node --check src/web/native-shim.js
+rg -n "__UPDATE_ASSET_SUFFIX__|replace_first.*UPDATE_ASSET_SUFFIX|versionParts|isNewer" src
+curl -fsSL https://api.github.com/repos/eaforlife/jellium-desktop-eajelly/releases/latest | jq '{tag_name,draft,assets:[.assets[].name]}'
+```
+
+In a packaged client, inspect `navigator.userAgent` and
+`window.jmpInfo.version`; compare the numeric app version with the latest
+release tag after removing its leading `v` and `-eajelly` suffix. A 30-minute
+workflow build window is normal, so do not diagnose a missing asset or update
+before all platform workflows finish.
+
 When changing release or updater code, test the packaged artifact—not only the
 workspace build—by opening About and by checking the automatic update prompt
 against a newer release. Record the release tag, asset names, workflow

@@ -400,9 +400,24 @@
         }
     };
 
+    let pictureInPictureCloseHost = null;
+    let pictureInPictureButton = null;
+    let videoOsdVisible = false;
+    let videoPlaybackActive = false;
+
     // Expose signal emitter for native code
     window._nativeEmit = function(signal, ...args) {
         console.debug('[Media] _nativeEmit called with signal:', signal, 'args:', args);
+        if (signal === 'playing') {
+            videoPlaybackActive = true;
+        } else if (signal === 'finished' || signal === 'canceled' || signal === 'error') {
+            videoPlaybackActive = false;
+            window._isPictureInPicture = false;
+        }
+        if (signal === 'playing' || signal === 'finished'
+            || signal === 'canceled' || signal === 'error') {
+            updatePictureInPictureUi();
+        }
         if (window.api && window.api.player && window.api.player[signal]) {
             console.debug('[Media] Firing signal:', signal);
             window.api.player[signal](...args);
@@ -417,10 +432,6 @@
             player.events.trigger(player, 'fullscreenchange');
         }
     };
-    let pictureInPictureCloseHost = null;
-    let pictureInPictureButton = null;
-    let videoOsdVisible = false;
-
     function isPictureInPictureControl(node) {
         if (!(node instanceof Element)) return false;
         const button = node.matches('button') ? node : node.closest('button');
@@ -456,7 +467,7 @@
         document.documentElement.classList.toggle('jmp-pip-active', window._isPictureInPicture);
         if (window._isPictureInPicture) markPictureInPictureControls(document);
         if (pictureInPictureButton) {
-            pictureInPictureButton.hidden = !videoOsdVisible;
+            pictureInPictureButton.hidden = !videoPlaybackActive || !videoOsdVisible;
             pictureInPictureButton.title = window._isPictureInPicture
                 ? 'Exit picture-in-picture' : 'Picture-in-picture';
             pictureInPictureButton.setAttribute('aria-label', pictureInPictureButton.title);
@@ -483,7 +494,7 @@
                 window.jmpNative.setPictureInPicture(!window._isPictureInPicture, 1);
             }
         });
-        button.style.cssText = 'position:fixed;left:60px;top:12px;z-index:2147483646;' +
+        button.style.cssText = 'position:fixed;left:max(60px,6vw);top:12px;z-index:2147483646;' +
             'width:40px;height:40px;border:0;border-radius:4px;background:rgba(20,20,20,.82);' +
             'color:#fff;cursor:pointer;font:18px sans-serif;box-shadow:0 1px 4px #0008;';
         button.textContent = '▣';
