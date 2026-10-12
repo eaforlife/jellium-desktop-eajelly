@@ -131,6 +131,11 @@ For the `windows` crate APIs, check the generated return type before writing
 error handling: APIs such as `SetWindowPos` return `Result<(), Error>` and
 must use `.is_ok()`/`?`, while BOOL-returning APIs expose `.as_bool()`.
 
+Never hold the Windows window-state mutex while calling Win32 window APIs;
+`SetWindowPos` can synchronously re-enter the window hook and deadlock. Keep
+the app-owned PiP control in an isolated Shadow DOM host with important inline
+positioning so server CSS cannot remove or restyle its internal button.
+
 When changing release or updater code, test the packaged artifact—not only the
 workspace build—by opening About and by checking the automatic update prompt
 against a newer release. Record the release tag, asset names, workflow

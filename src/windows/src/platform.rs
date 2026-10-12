@@ -181,10 +181,6 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
         return;
     };
     if enabled {
-        let mut state = STATE.lock();
-        if state.picture_in_picture_restore.is_some() {
-            return;
-        }
         let mut restore = RECT::default();
         if unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut restore) }
             .is_err()
@@ -206,6 +202,13 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
         let size = fit_display_fraction(display, aspect_ratio, DEFAULT_SCREEN_FRACTION);
         let x = info.rcWork.right - size.w;
         let y = info.rcWork.bottom - size.h;
+        {
+            let mut state = STATE.lock();
+            if state.picture_in_picture_restore.is_some() {
+                return;
+            }
+            state.picture_in_picture_restore = Some(restore);
+        }
         if !unsafe {
             SetWindowPos(
                 hwnd,
@@ -219,9 +222,9 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
         }
         .is_ok()
         {
+            STATE.lock().picture_in_picture_restore = None;
             return;
         }
-        state.picture_in_picture_restore = Some(restore);
     } else {
         let restore = STATE.lock().picture_in_picture_restore.take();
         let Some(restore) = restore else {

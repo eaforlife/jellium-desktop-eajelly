@@ -401,6 +401,7 @@
     };
 
     let pictureInPictureCloseHost = null;
+    let pictureInPictureHost = null;
     let pictureInPictureButton = null;
     let videoOsdVisible = false;
     let videoPlaybackActive = false;
@@ -467,7 +468,8 @@
         document.documentElement.classList.toggle('jmp-pip-active', window._isPictureInPicture);
         if (window._isPictureInPicture) markPictureInPictureControls(document);
         if (pictureInPictureButton) {
-            pictureInPictureButton.hidden = !videoPlaybackActive || !videoOsdVisible;
+            pictureInPictureHost.dataset.visible =
+                videoPlaybackActive && videoOsdVisible ? '1' : '0';
             pictureInPictureButton.title = window._isPictureInPicture
                 ? 'Exit picture-in-picture' : 'Picture-in-picture';
             pictureInPictureButton.setAttribute('aria-label', pictureInPictureButton.title);
@@ -480,10 +482,15 @@
 
     function buildPictureInPictureButton() {
         if (pictureInPictureButton || !window.jmpNative?.setPictureInPicture) return;
+        const host = document.createElement('jmp-pip-control');
+        host.style.cssText = 'position:fixed!important;left:max(60px,6vw)!important;top:12px!important;' +
+            'z-index:2147483646!important;display:block!important;width:40px!important;height:40px!important;' +
+            'pointer-events:auto!important;';
+        const root = host.attachShadow({ mode: 'closed' });
+        const style = document.createElement('style');
+        style.textContent = ':host([data-visible="0"]) { display:none!important; }';
         const button = document.createElement('button');
         button.type = 'button';
-        button.hidden = true;
-        button.className = 'jmp-pip-button';
         button.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
@@ -498,8 +505,10 @@
             'width:40px;height:40px;border:0;border-radius:4px;background:rgba(20,20,20,.82);' +
             'color:#fff;cursor:pointer;font:18px sans-serif;box-shadow:0 1px 4px #0008;';
         button.textContent = '▣';
+        root.append(style, button);
+        pictureInPictureHost = host;
         pictureInPictureButton = button;
-        document.body.appendChild(button);
+        document.documentElement.appendChild(host);
         updatePictureInPictureUi();
     }
 
