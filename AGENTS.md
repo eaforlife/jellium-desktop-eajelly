@@ -116,6 +116,13 @@ the CEF browser User-Agent so server JavaScript can identify the client and
 extract its version. Test `navigator.userAgent` in a packaged build; changing
 only the MPV User-Agent does not affect server JavaScript.
 
+Updater code is compiled in every platform workspace even when installation
+is Windows-only. Keep its dependencies declared in `src/jfn_cef/Cargo.toml`
+and the workspace dependency table, update `src/Cargo.lock`, and use the
+current logging API (`jfn_logging::Category` and `jfn_logging::Level`) rather
+than removed compatibility constants. A passing Windows-only code path is not
+enough: run locked metadata and a focused `jfn-cef` check before retagging.
+
 ## Token-Efficient Agent Workflow
 
 Start with `git status --short`, then use targeted `rg` searches and bounded

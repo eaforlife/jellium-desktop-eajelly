@@ -64,8 +64,8 @@ pub(crate) fn install(url: &str, digest: &str, expected_size: u64) -> bool {
     let _ = std::thread::spawn(move || {
         if let Err(error) = download_and_launch(&url, &digest, expected_size) {
             jfn_logging::log(
-                jfn_logging::CATEGORY_CEF,
-                jfn_logging::LEVEL_ERROR,
+                jfn_logging::Category::Cef,
+                jfn_logging::Level::Error,
                 &format!("Update failed: {error}"),
             );
             UPDATE_STARTED.store(false, Ordering::Release);
@@ -81,8 +81,8 @@ fn download_and_launch(
     expected_size: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     jfn_logging::log(
-        jfn_logging::CATEGORY_CEF,
-        jfn_logging::LEVEL_INFO,
+        jfn_logging::Category::Cef,
+        jfn_logging::Level::Info,
         &format!("Downloading update from {url}"),
     );
     let mut response = ureq::get(url)
@@ -133,8 +133,8 @@ fn download_and_launch(
     }
 
     jfn_logging::log(
-        jfn_logging::CATEGORY_CEF,
-        jfn_logging::LEVEL_INFO,
+        jfn_logging::Category::Cef,
+        jfn_logging::Level::Info,
         &format!("Launching installer: {}", installer.display()),
     );
     std::process::Command::new(&installer)
