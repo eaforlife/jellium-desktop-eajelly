@@ -164,10 +164,11 @@ impl SettingsOverlay {
                 .class(tab_class(self.active == Tab::About)),
             Message::Select(Tab::About),
         );
-        let close = button(text("\u{00d7}").size(18))
-            .on_press(Message::Dismiss)
-            .class(theme::ButtonClass::Chrome)
-            .into();
+        let close: Element<'_, Message, Theme, iced_wgpu::Renderer> =
+            button(text("\u{00d7}").size(18))
+                .on_press(Message::Dismiss)
+                .class(theme::ButtonClass::Chrome)
+                .into();
         let header = row![
             settings_tab,
             about_tab,

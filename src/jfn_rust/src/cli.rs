@@ -347,7 +347,10 @@ mod tests {
     // Keep the platform default and general CLI defaults internally consistent.
     #[test]
     fn const_defaults_match_help_text() {
-        assert_eq!(jfn_config::HWDEC_DEFAULT, jfn_config::Hwdec::default().as_str());
+        assert_eq!(
+            jfn_config::HWDEC_DEFAULT,
+            jfn_config::Hwdec::default().as_str()
+        );
         assert_eq!(crate::app::DEFAULT_LOG_FILTER, "info");
     }
 }

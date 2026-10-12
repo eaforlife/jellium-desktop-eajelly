@@ -32,6 +32,12 @@ with the repository's pinned dependencies, commit the resulting `Cargo.lock`,
 and rerun the locked lookup before tagging. Never tag a release with a dirty
 or out-of-date lockfile.
 
+When converting iced widgets with `.into()` into a local variable, give the
+variable an explicit `Element<'_, Message, Theme, Renderer>` type whenever no
+surrounding expression provides the expected type. Otherwise iced's generic
+theme/renderer parameters can fail to infer in CI even when the code works in
+an editor.
+
 ## Constants
 Every timing, interval or threshold derives from a value the system reports or
 from a value a requirements note records. A plan that is silent on a value the
