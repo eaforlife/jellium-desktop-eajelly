@@ -55,7 +55,10 @@ impl serde::Serialize for Hwdec {
 
 impl<'de> serde::Deserialize<'de> for Hwdec {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = <&str>::deserialize(deserializer)?;
+        // The settings loader first materializes each optional field as a
+        // `serde_json::Value`; borrowing `&str` from that temporary causes
+        // lenient deserialization to discard otherwise valid saved values.
+        let value = String::deserialize(deserializer)?;
         value.parse().map_err(serde::de::Error::custom)
     }
 }

@@ -251,11 +251,11 @@ impl Settings {
             Message::CommitAudioPassthrough => {
                 jfn_config::set_audio_passthrough(&self.audio_passthrough);
                 jfn_mpv::api::apply_runtime_setting("audioPassthrough", &self.audio_passthrough);
-                jfn_config::settings_save_async();
+                jfn_config::settings_save();
             }
             Message::CommitDeviceName => {
                 jfn_config::set_device_name(&self.device_name, &self.device_name_default);
-                jfn_config::settings_save_async();
+                jfn_config::settings_save();
             }
             _ => {}
         }
@@ -319,11 +319,14 @@ impl Settings {
                 self.commit_text(Message::CommitAudioPassthrough);
                 self.commit_text(Message::CommitDeviceName);
                 jfn_config::set_server_url("");
-                jfn_config::settings_save_async();
+                jfn_config::settings_save();
                 return Outcome::ResetSavedServer;
             }
         }
-        jfn_config::settings_save_async();
+        // Native settings are low-frequency user actions. Write synchronously
+        // so a restart immediately after changing a control cannot race the
+        // background save worker.
+        jfn_config::settings_save();
         Outcome::None
     }
 

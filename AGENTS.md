@@ -191,6 +191,7 @@ writing a justification for it is the failure mode, not the mitigation.
 - **mpv** (fork in `third_party/mpv`) — video playback; the desktop client injects native shims to override browser media playback. mpv owns its own window + GPU; libmpv is used only for the control plane (properties/commands/events).
 - Wayland subsurface for video layer (Linux). Platform crates: `src/macos`, `src/windows`, plus Wayland/X11 paths under `src/`.
 - Native client settings are a modal owned by the shell. Any legacy/web-injected settings route must be torn down when the native modal closes; do not allow two settings surfaces to remain mounted or compete for focus.
+- Native settings controls must use synchronous `jfn_config::settings_save()` after changes; these infrequent user actions must be durable before restart or modal dismissal. Reserve `settings_save_async()` for high-frequency/web IPC updates.
 
 ## mpv Integration
 - **Never call sync mpv API (`mpv_get_property`, etc.) from event callbacks** - causes deadlock during video init. Use property observation or async variants instead.

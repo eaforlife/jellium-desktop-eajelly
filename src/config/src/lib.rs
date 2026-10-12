@@ -763,6 +763,15 @@ mod tests {
         assert_eq!(data.window.x, -1);
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_hwdec_copy_backend_round_trips() {
+        let data = loaded(r#"{"hwdec":"nvdec-copy"}"#);
+        assert_eq!(data.hwdec.as_str(), "nvdec-copy");
+        let text = serde_json::to_string(&data.to_file()).expect("serializes");
+        assert!(text.contains(r#""hwdec":"nvdec-copy""#));
+    }
+
     #[test]
     fn transparent_titlebar_false_round_trips_and_true_is_omitted() {
         let false_data = loaded(r#"{"transparentTitlebar":false}"#);
