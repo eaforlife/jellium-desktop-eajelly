@@ -3,7 +3,7 @@
 use iced_core::widget::Id;
 use iced_core::widget::operation::scrollable::AbsoluteOffset;
 use iced_core::{Alignment, Color, Element, Length, Padding};
-use iced_widget::{Container, button, column, container, mouse_area, row, text};
+use iced_widget::{Container, button, column, container, row, text};
 
 use crate::shell::about::About;
 use crate::shell::controls;
@@ -182,17 +182,18 @@ impl SettingsOverlay {
         let body = column![header, content].spacing(18);
         let card = card(body);
 
-        mouse_area(
-            container(card)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .padding(24)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::Center)
-                .class(theme::ContainerClass::Backdrop),
-        )
-        .on_press(Message::Dismiss)
-        .into()
+        // Keep the close control as the only dismissal target inside the
+        // frame. A full-screen parent mouse area competes with the header
+        // button and can leave the modal-looking frame mounted after X is
+        // pressed. Escape remains handled by the modal stack.
+        container(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(24)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .class(theme::ContainerClass::Backdrop)
+            .into()
     }
 
     pub fn backdrop(&self) -> Color {
@@ -314,10 +315,9 @@ mod tests {
     }
 
     #[test]
-    fn backdrop_x_and_swallowed_card_have_the_required_outcomes() {
+    fn close_button_dismisses_the_overlay() {
         let mut overlay = SettingsOverlay::testing(Tab::Settings);
         assert_eq!(overlay.backdrop().a, 0.5);
-        assert_eq!(overlay.update(Message::Swallow), Outcome::None);
         assert_eq!(overlay.update(Message::Dismiss), Outcome::Dismiss);
     }
 }
