@@ -22,7 +22,6 @@ pub enum Tab {
 #[derive(Clone, Debug)]
 pub enum Message {
     Dismiss,
-    Swallow,
     Select(Tab),
     Settings(settings::Message),
     About(crate::shell::about::Message),
@@ -132,7 +131,6 @@ impl SettingsOverlay {
     pub fn update(&mut self, message: Message) -> Outcome {
         match message {
             Message::Dismiss => self.dismiss(),
-            Message::Swallow => Outcome::None,
             Message::Select(tab) => {
                 self.select(tab);
                 Outcome::None
@@ -182,7 +180,7 @@ impl SettingsOverlay {
             Tab::About => self.about.view().map(Message::About),
         };
         let body = column![header, content].spacing(18);
-        let card = mouse_area(card(body)).on_press(Message::Swallow);
+        let card = card(body);
 
         mouse_area(
             container(card)
