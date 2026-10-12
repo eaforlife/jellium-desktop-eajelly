@@ -395,6 +395,13 @@ pub(crate) fn build_web(shared_textures_enabled: bool) -> ExtraInfo {
         window_decorations: jfn_config::configured_window_decorations(),
         window_decoration_options: Vec::new(),
     };
+    let pip_supported = jfn_platform_abi::try_lease()
+        .is_some_and(|platform| platform.picture_in_picture_supported());
+    if !pip_supported {
+        extra_info
+            .functions
+            .retain(|function| *function != NativeFunction::SetPictureInPicture);
+    }
     if let Some(json) = DEVICE_PROFILE_JSON.get()
         && !json.is_empty()
     {

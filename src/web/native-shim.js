@@ -479,7 +479,7 @@
     }
 
     function buildPictureInPictureButton() {
-        if (pictureInPictureButton) return;
+        if (pictureInPictureButton || !window.jmpNative?.setPictureInPicture) return;
         const button = document.createElement('button');
         button.type = 'button';
         button.hidden = true;
