@@ -886,7 +886,14 @@ impl Loop {
             return;
         }
 
+        let modal_before = this.model.stack.identity();
         this.model.apply_message_batch(updated.messages);
+        if modal_before != this.model.stack.identity() {
+            // A modal transition changes the root widget tree. Do not carry
+            // the previous settings/menu frame into the next compositor
+            // paint after close; rebuild the shell tree from the new model.
+            this.discard_cache();
+        }
         for event in &updated.ignored {
             match ignored_key(&this.model, event) {
                 Some(IgnoredKey::Escape) => this.model.transition(Transition::Escape),
