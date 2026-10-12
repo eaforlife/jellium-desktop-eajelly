@@ -114,8 +114,13 @@ pub(crate) fn jfn_cef_initialize(
         log_severity: options.log_severity.native(),
         remote_debugging_port: options.remote_debugging_port.native(),
         locale: CefString::from("en-US"),
+        // Advertise both the human-readable product token consumed by the
+        // server's desktop-client checks and the legacy compact token used by
+        // older integrations.
         user_agent: CefString::from(concat!(
-            "Mozilla/5.0 jellium-desktop/",
+            "Mozilla/5.0 Jellium Desktop/",
+            env!("JFN_APP_VERSION"),
+            " jellium-desktop/",
             env!("JFN_APP_VERSION")
         )),
         root_cache_path: CefString::from(jfn_paths::cache_dir().to_string_lossy().as_ref()),

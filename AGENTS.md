@@ -104,6 +104,12 @@ workspace build—by opening About and by checking the automatic update prompt
 against a newer release. Record the release tag, asset names, workflow
 completion state, API response, and client log before changing version logic.
 
+The browser User-Agent is part of the server integration contract. Keep the
+explicit `Jellium Desktop/<version>` token (plus the legacy compact token) in
+the CEF browser User-Agent so server JavaScript can identify the client and
+extract its version. Test `navigator.userAgent` in a packaged build; changing
+only the MPV User-Agent does not affect server JavaScript.
+
 ## Before Version Tags / Releases
 Before committing a new version or creating a release tag, run the same locked
 metadata lookup used by CI:
