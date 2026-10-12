@@ -148,14 +148,17 @@ modules:
         cleanup:
           - /bin
         sources:
-          - type: archive
-            url: https://www.freedesktop.org/software/uchardet/releases/uchardet-0.0.8.tar.xz
-            sha256: e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f0
+          # The freedesktop archive endpoint intermittently returns HTTP 418
+          # to GitHub-hosted Flatpak builders. Use the matching upstream tag
+          # at its immutable commit instead.
+          - type: git
+            url: https://gitlab.freedesktop.org/uchardet/uchardet.git
+            tag: v0.0.8
+            commit: ae6302a016088ad07177f86d417b20010053632b
             x-checker-data:
-              type: anitya
-              project-id: 9265
-              stable-only: true
-              url-template: https://www.freedesktop.org/software/uchardet/releases/uchardet-$version.tar.xz
+              type: git
+              gitlab: uchardet/uchardet
+              tag-pattern: ^v([\d.]+)$
 
   - name: jellium-desktop
     buildsystem: simple

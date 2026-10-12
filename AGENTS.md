@@ -65,6 +65,12 @@ dependencies cannot be loaded by the MSVC-hosted Rust process. For packaged
 desktop builds, smoke-test startup and inspect the platform log, not just the
 compiler output.
 
+Flatpak manifests must pin every network source to an immutable archive hash
+or Git commit. Prefer a pinned upstream Git tag/commit when a release archive
+endpoint returns anti-bot or transient HTTP errors (such as 418); validate
+that the replacement commit is the exact requested dependency version and run
+the Flatpak manifest/build check before tagging.
+
 Platform startup ordering is significant: asynchronous MPV property
 observations may not have reached playback state when native platform setup
 runs. A non-event startup path may use a synchronous property fallback when
