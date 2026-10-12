@@ -309,6 +309,16 @@ fn handle_message(message: BrowserMessage) -> bool {
             }
             true
         }
+        "setPictureInPicture" => with_args(args, |a| {
+            let enabled = a.bool(0) != 0;
+            let aspect_ratio = a.double(1);
+            if let Some(platform) = jfn_platform_abi::try_lease() {
+                platform.set_picture_in_picture(enabled, aspect_ratio);
+            }
+            jfn_playback::exec_js::call(&format!(
+                "window._nativePictureInPictureChanged({enabled})"
+            ));
+        }),
         "installUpdate" => with_args(args, |a| {
             let url = list_string(a, 0);
             let digest = list_string(a, 1);

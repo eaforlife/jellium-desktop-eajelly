@@ -14,7 +14,7 @@ fn slot() -> &'static Mutex<Option<ExecJsCb>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
-pub(crate) fn call(js: &str) {
+pub fn call(js: &str) {
     let Some(cb) = *slot().lock() else {
         return;
     };

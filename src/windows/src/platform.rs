@@ -13,12 +13,16 @@ use std::ffi::{c_int, c_void};
 use std::thread::JoinHandle;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+};
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::WindowsAndMessaging::{
     CWPRETSTRUCT, CallNextHookEx, GWL_STYLE, GetWindowLongPtrW, GetWindowThreadProcessId, HHOOK,
-    IsZoomed, SIZE_MINIMIZED, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    SetWindowsHookExW, SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROCRET, WM_CLOSE,
-    WM_DPICHANGED, WM_MOVE, WM_SIZE, WM_STYLECHANGED, WS_CAPTION, WS_THICKFRAME,
+    HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed, SIZE_MINIMIZED, SPI_GETWORKAREA, SWP_NOACTIVATE,
+    SWP_SHOWWINDOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowPos, SetWindowsHookExW,
+    SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROCRET, WM_CLOSE, WM_DPICHANGED,
+    WM_MOVE, WM_SIZE, WM_STYLECHANGED, WS_CAPTION, WS_THICKFRAME,
 };
 
 use jfn_mpv::api::{
@@ -26,7 +30,9 @@ use jfn_mpv::api::{
     jfn_mpv_toggle_fullscreen,
 };
 use jfn_mpv::boot::jfn_mpv_handle_get;
+use jfn_platform_abi::PhysicalSize;
 use jfn_platform_abi::geometry::{Bounds, WindowGeometry, clamp_to_bounds};
+use jfn_platform_abi::picture_in_picture::{DEFAULT_SCREEN_FRACTION, fit_display_fraction};
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 
 use crate::input::{
@@ -40,6 +46,7 @@ struct WinState {
     restore_maximized_on_unfullscreen: bool,
     wndproc_hook_raw: usize,
     input_thread: Option<JoinHandle<()>>,
+    picture_in_picture_restore: Option<RECT>,
 }
 
 impl WinState {
@@ -50,6 +57,7 @@ impl WinState {
             restore_maximized_on_unfullscreen: false,
             wndproc_hook_raw: 0,
             input_thread: None,
+            picture_in_picture_restore: None,
         }
     }
 }
@@ -165,6 +173,71 @@ pub(crate) fn win_toggle_fullscreen() {
     jfn_mpv_toggle_fullscreen();
     if should_restore_maximized {
         jfn_mpv_set_window_maximized(true);
+    }
+}
+
+pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
+    let Some(hwnd) = win_hwnd() else {
+        return;
+    };
+    if enabled {
+        let mut state = STATE.lock();
+        if state.picture_in_picture_restore.is_some() {
+            return;
+        }
+        let mut restore = RECT::default();
+        if unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut restore) }
+            .is_err()
+        {
+            return;
+        }
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+            return;
+        }
+        let display = PhysicalSize {
+            w: info.rcWork.right - info.rcWork.left,
+            h: info.rcWork.bottom - info.rcWork.top,
+        };
+        let size = fit_display_fraction(display, aspect_ratio, DEFAULT_SCREEN_FRACTION);
+        let x = info.rcWork.right - size.w;
+        let y = info.rcWork.bottom - size.h;
+        if !unsafe {
+            SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                x,
+                y,
+                size.w,
+                size.h,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        }
+        .as_bool()
+        {
+            return;
+        }
+        state.picture_in_picture_restore = Some(restore);
+    } else {
+        let restore = STATE.lock().picture_in_picture_restore.take();
+        let Some(restore) = restore else {
+            return;
+        };
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                Some(HWND_NOTOPMOST),
+                restore.left,
+                restore.top,
+                restore.right - restore.left,
+                restore.bottom - restore.top,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        };
     }
 }
 

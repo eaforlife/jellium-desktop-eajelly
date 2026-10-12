@@ -333,6 +333,14 @@ impl Platform for WindowsPlatform {
         win_toggle_fullscreen();
     }
 
+    fn picture_in_picture_supported(&self) -> bool {
+        true
+    }
+
+    fn set_picture_in_picture(&self, enabled: bool, aspect_ratio: f64) {
+        crate::platform::win_set_picture_in_picture(enabled, aspect_ratio);
+    }
+
     // mpv's own WndProc settles the size; nothing here gates a frame
     fn resize_gate(&self) -> Option<&dyn jfn_platform_abi::ResizeGate> {
         None

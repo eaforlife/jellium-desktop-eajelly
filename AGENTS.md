@@ -121,6 +121,12 @@ release tag after removing its leading `v` and `-eajelly` suffix. A 30-minute
 workflow build window is normal, so do not diagnose a missing asset or update
 before all platform workflows finish.
 
+The app-owned PiP button requires all three layers: `setPictureInPicture`
+must be in the CEF injection allowlist, routed by `business_web`, and
+implemented by the platform backend. Keep playback-finished/canceled/error
+events clearing the browser PiP state, and test both entering and exiting PiP
+after a video ends.
+
 When changing release or updater code, test the packaged artifact—not only the
 workspace build—by opening About and by checking the automatic update prompt
 against a newer release. Record the release tag, asset names, workflow
