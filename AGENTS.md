@@ -23,6 +23,62 @@ Platform-specific entry points live in `dev/linux/`, `dev/macos/`, `dev/windows/
 ## Before Committing
 Run `just fmt` and `just lint` before every commit; both must pass clean (lint runs `fmt-check` + `clippy`, and CI rejects unformatted or lint-failing code).
 
+For a documentation-only commit, still run at least `just fmt-check`,
+`cargo metadata --format-version 1 --locked --manifest-path src/Cargo.toml`,
+and `git diff --check`. Preserve unrelated working-tree changes and confirm
+the final diff contains only the requested files.
+
+## Upstream Merge Procedure
+
+Treat `upstream` as a source tree whose commits may be coupled across many
+crates. Before merging:
+
+1. Fetch the upstream remote and record the newest upstream commit and its
+   author timestamp.
+2. Require the newest upstream commit to be at least five full days old before
+   merging it. If it is newer, defer the merge and report the commit date;
+   merge sooner only when the user explicitly overrides this stabilization
+   window.
+3. Review the complete upstream range and compare the coupled boundary crates:
+   `jfn_cef`, `jfn_rust`, `config`, `platform_abi`, `playback`, `windows`,
+   `macos`, `x11`, `wayland`, and `Cargo.lock`. Do not merge one side of an
+   API migration in isolation.
+4. Prefer a coherent upstream generation for a coupled crate family, then
+   reapply this fork's customizations on top. Afterward audit the fork-specific
+   diff and verify that custom server behavior, the app-owned miniplayer/PiP
+   control, branding, packaging, and workflow changes still exist and use the
+   new APIs.
+5. Resolve conflicts by following the resulting API contract, not by keeping
+   both old and new symbols. Search for stale names and conflict markers after
+   every migration, especially platform lifecycle methods, scale types,
+   surface presentation, unsafe platform access, CEF startup APIs, and typed
+   hardware-decoding settings.
+6. Regenerate `src/Cargo.lock` only with the repository's pinned dependencies
+   when required, then rerun the exact locked metadata command. Never commit a
+   manually edited or stale lockfile.
+
+Before pushing a merged change, run the relevant target checks locally and
+inspect every affected GitHub Actions workflow. For Windows bindgen builds,
+verify that a loadable native `libclang.dll` is selected through
+`LIBCLANG_PATH`; installing a package is insufficient if the DLL or its
+dependencies cannot be loaded by the MSVC-hosted Rust process. For packaged
+desktop builds, smoke-test startup and inspect the platform log, not just the
+compiler output.
+
+Platform startup ordering is significant: asynchronous MPV property
+observations may not have reached playback state when native platform setup
+runs. A non-event startup path may use a synchronous property fallback when
+needed; never perform synchronous MPV reads from an MPV event callback.
+
+## Release and Push Scope
+
+Do not create, move, delete, or push tags unless the user explicitly requests
+release/tag work. If the user asks for a commit to `main` only, push only the
+requested branch and leave tags and releases unchanged. Before a release tag,
+the tree must be clean, the locked metadata check must pass, all relevant
+workflow filters must match the tag, and the affected platform artifacts must
+be buildable.
+
 ## Before Version Tags / Releases
 Before committing a new version or creating a release tag, run the same locked
 metadata lookup used by CI:
