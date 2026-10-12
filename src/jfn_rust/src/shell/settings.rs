@@ -274,6 +274,7 @@ impl Settings {
                 if let Ok(hwdec) = value.parse() {
                     jfn_config::set_hwdec(hwdec);
                     jfn_mpv::api::apply_runtime_setting("hwdec", &value);
+                    jfn_config::settings_save();
                 }
             }
             Message::AudioPassthroughEdited(value) => {

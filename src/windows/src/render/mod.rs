@@ -63,6 +63,10 @@ struct Entry {
     id: SurfaceId,
     content: Layer,
     popup: Layer,
+    /// Hidden entries are deliberately detached from the root visual. Keeping
+    /// them only invisible is not sufficient on every DComp driver: a cached
+    /// swapchain frame can remain visible after `SetVisible(false)`.
+    attached: bool,
 }
 
 impl Entry {
@@ -79,6 +83,7 @@ impl Entry {
             id,
             content: Layer::new(content),
             popup: Layer::new(popup),
+            attached: true,
         })
     }
 
@@ -219,10 +224,36 @@ pub(crate) fn free(h: SurfaceHandle) {
     }
 }
 
+/// Reparent the attached entries in their current bottom-to-top order. A
+/// detached entry is intentionally absent from the DComp tree until it is
+/// shown again, which prevents a previously presented frame from surviving a
+/// modal close.
+fn apply_attached_stack(root: &IDCompositionVisual, entries: &[Entry]) {
+    unsafe {
+        for entry in entries {
+            let _ = root.RemoveVisual(entry.content.visual());
+        }
+        let mut prev: Option<&IDCompositionVisual> = None;
+        for entry in entries.iter().filter(|entry| entry.attached) {
+            let visual = entry.content.visual();
+            let placed = match prev {
+                Some(prev) => root.AddVisual(visual, true, prev),
+                None => root.AddVisual(visual, false, None::<&IDCompositionVisual>),
+            };
+            match placed {
+                Ok(()) => prev = Some(visual),
+                Err(e) => {
+                    tracing::error!(target: "platform", "apply_stack AddVisual failed: {e:?}");
+                }
+            }
+        }
+    }
+}
+
 /// Apply the whole z-order to the root's children, bottom-to-top. Live
 /// surfaces `ordered` does not name keep their relative order above those it
-/// does, so every live surface stays parented. Video needs no placing: the
-/// composition target is mpv's own HWND, so every visual is above it.
+/// does. Video needs no placing: the composition target is mpv's own HWND, so
+/// every attached visual is above it.
 pub(crate) fn apply_stack(ordered: &[SurfaceHandle]) {
     let mut st = STATE.lock();
     let Registry {
@@ -239,37 +270,32 @@ pub(crate) fn apply_stack(ordered: &[SurfaceHandle]) {
     named.sort_by_key(|e| rank(e).unwrap_or(usize::MAX));
     named.append(&mut unnamed);
 
-    unsafe {
-        for entry in &named {
-            let _ = root.RemoveVisual(entry.content.visual());
-        }
-        let mut prev: Option<&IDCompositionVisual> = None;
-        for entry in &named {
-            let visual = entry.content.visual();
-            let placed = match prev {
-                Some(prev) => root.AddVisual(visual, true, prev),
-                None => root.AddVisual(visual, false, None::<&IDCompositionVisual>),
-            };
-            match placed {
-                Ok(()) => prev = Some(visual),
-                Err(e) => {
-                    tracing::error!(target: "platform", "apply_stack AddVisual failed: {e:?}");
-                }
-            }
-        }
-    }
-
     *surfaces = named;
+    apply_attached_stack(root, surfaces);
     st.commit();
 }
 
-/// Set a surface's content visual to `visibility`, publish it, and wait for
-/// the composition engine to process the commit. Nothing here moves the visual
-/// or touches its content binding.
+/// Set a surface's content visual to `visibility`, attach or detach it from
+/// the root, publish it, and wait for the composition engine to process the
+/// commit. Detaching a hidden visual is the hard boundary that prevents stale
+/// shell frames from covering an otherwise interactive web layer.
 pub(crate) fn set_visibility(h: SurfaceHandle, visibility: Visibility) -> VisibilityCommit {
     let mut st = STATE.lock();
-    if let Some(entry) = st.find_mut(h) {
-        entry.content.set_visible(visibility.is_shown());
+    let Registry {
+        devices, surfaces, ..
+    } = &mut *st;
+    let Some(root) = devices.as_ref().map(Devices::root) else {
+        return VisibilityCommit::issued(visibility, Ack::immediate());
+    };
+    let shown = visibility.is_shown();
+    let mut changed = false;
+    if let Some(entry) = surfaces.iter_mut().find(|entry| entry.id.0 == h.id()) {
+        changed = entry.attached != shown;
+        entry.attached = shown;
+        entry.content.set_visible(shown);
+    }
+    if changed {
+        apply_attached_stack(root, surfaces);
     }
     st.commit_and_wait();
     VisibilityCommit::issued(visibility, Ack::immediate())

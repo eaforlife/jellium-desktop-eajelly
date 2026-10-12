@@ -1,8 +1,5 @@
 //! Hwdec mode policy: which mpv hardware-decode backends each OS offers.
 
-#[cfg(target_os = "windows")]
-pub const HWDEC_DEFAULT: &str = "d3d11va";
-#[cfg(not(target_os = "windows"))]
 pub const HWDEC_DEFAULT: &str = "auto";
 
 #[expect(

@@ -59,10 +59,10 @@ impl Layer {
         }
     }
 
-    /// Sets the visual's visibility through `IDCompositionVisual3::SetVisible`.
-    /// The swapchain's binding to the visual is untouched, so a layer shown
-    /// again presents into the visual it was already bound to, and an
-    /// externally presented layer keeps its content across a hide.
+    /// Sets the visual's visibility through both DirectComposition's visible
+    /// flag and opacity. Some drivers retain the last submitted swapchain
+    /// frame while a visual is hidden, so opacity must be cleared as well to
+    /// prevent stale pixels from remaining above the web layer.
     pub(crate) fn set_visible(&self, visible: bool) {
         let visual3: IDCompositionVisual3 = match self.visual.cast() {
             Ok(visual3) => visual3,
@@ -73,6 +73,9 @@ impl Layer {
         };
         if let Err(e) = unsafe { visual3.SetVisible(visible) } {
             tracing::error!(target: "platform", "SetVisible failed: {e:?}");
+        }
+        if let Err(e) = unsafe { visual3.SetOpacity2(if visible { 1.0 } else { 0.0 }) } {
+            tracing::error!(target: "platform", "SetOpacity failed: {e:?}");
         }
     }
 

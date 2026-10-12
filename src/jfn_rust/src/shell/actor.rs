@@ -888,11 +888,21 @@ impl Loop {
 
         let modal_before = this.model.stack.identity();
         this.model.apply_message_batch(updated.messages);
-        if modal_before != this.model.stack.identity() {
+        let modal_after = this.model.stack.identity();
+        let modal_closed = modal_before == Some(Identity::SettingsOverlay)
+            && modal_after != Some(Identity::SettingsOverlay);
+        if modal_before != modal_after {
             // A modal transition changes the root widget tree. Do not carry
             // the previous settings/menu frame into the next compositor
             // paint after close; rebuild the shell tree from the new model.
             this.discard_cache();
+
+            // Hide the old compositor visual before input routing can expose
+            // the web layer again. The next immediate pass repaints and
+            // restores the titlebar visual when it is still needed.
+            if modal_closed {
+                tracing::debug!(target: "shell", "settings modal closed; retiring shell visual");
+            }
         }
         for event in &updated.ignored {
             match ignored_key(&this.model, event) {
@@ -904,6 +914,12 @@ impl Loop {
         this.immediate = true;
         publish(&this.model, this.current);
         apply_visibility(this.surface, &this.model);
+        if modal_closed {
+            // Keep this as the final visibility operation in the transition
+            // pass. A titlebar may still require the surface on the next
+            // frame, but it must not resurrect the old modal pixels first.
+            hide_surface(this.surface);
+        }
     }
 }
 
@@ -1304,6 +1320,15 @@ fn apply_visibility(surface: SurfaceHandle, model: &Model) -> Visibility {
         .platform()
         .set_surface_visibility(surface, model.visibility())
         .acknowledged()
+}
+
+fn hide_surface(surface: SurfaceHandle) {
+    if let Some(lease) = jfn_platform_abi::try_lease() {
+        lease
+            .platform()
+            .set_surface_visibility(surface, Visibility::Hidden)
+            .acknowledged();
+    }
 }
 
 fn wait_for_target(
