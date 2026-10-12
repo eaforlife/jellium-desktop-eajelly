@@ -610,6 +610,7 @@ fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
     replace_first(&mut code, "__SERVER_URL__", &jfn_config::server_url());
     replace_first(&mut code, "__SETTINGS_JSON__", &jfn_config::cli_json());
     replace_first(&mut code, "__APP_VERSION__", crate::APP_VERSION);
+    replace_first(&mut code, "__UPDATE_ASSET_SUFFIX__", update_asset_suffix());
     let decoration_options = profile
         .window_decoration_options()
         .iter()
@@ -635,6 +636,21 @@ fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
     let url = CefString::from(&url_uf);
     let code_cef = CefString::from(code.as_str());
     frame.execute_java_script(Some(&code_cef), Some(&url), 0);
+}
+
+fn update_asset_suffix() -> &'static str {
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    {
+        "-windows-arm64-setup.exe"
+    }
+    #[cfg(all(target_os = "windows", not(target_arch = "aarch64")))]
+    {
+        "-windows-x64-setup.exe"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        ""
+    }
 }
 
 fn ensure_renderer_settings_loaded() {

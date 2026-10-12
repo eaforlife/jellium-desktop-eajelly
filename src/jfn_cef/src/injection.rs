@@ -49,6 +49,7 @@ pub(crate) enum NativeFunction {
     ThemeColor,
     SetOsdVisible,
     ToggleFullscreen,
+    InstallUpdate,
 }
 
 impl NativeFunction {
@@ -85,6 +86,7 @@ impl NativeFunction {
             "themeColor" => Self::ThemeColor,
             "setOsdVisible" => Self::SetOsdVisible,
             "toggleFullscreen" => Self::ToggleFullscreen,
+            "installUpdate" => Self::InstallUpdate,
             _ => return None,
         })
     }
@@ -122,6 +124,7 @@ impl NativeFunction {
             Self::ThemeColor => "themeColor",
             Self::SetOsdVisible => "setOsdVisible",
             Self::ToggleFullscreen => "toggleFullscreen",
+            Self::InstallUpdate => "installUpdate",
         }
     }
 }
@@ -199,6 +202,7 @@ const WEB_FUNCTIONS: &[NativeFunction] = &[
     NativeFunction::ThemeColor,
     NativeFunction::SetOsdVisible,
     NativeFunction::ToggleFullscreen,
+    NativeFunction::InstallUpdate,
 ];
 
 const WEB_SCRIPTS: &[InjectedScript] = &[

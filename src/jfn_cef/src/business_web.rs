@@ -309,6 +309,18 @@ fn handle_message(message: BrowserMessage) -> bool {
             }
             true
         }
+        "installUpdate" => with_args(args, |a| {
+            let url = list_string(a, 0);
+            let digest = list_string(a, 1);
+            let size = list_int(a, 2).max(0) as u64;
+            if !crate::updater::install(&url, &digest, size) {
+                jfn_logging::log(
+                    jfn_logging::Category::Cef,
+                    jfn_logging::Level::Warn,
+                    "Rejected update installer request",
+                );
+            }
+        }),
         "saveServerUrl" => with_args(args, |a| {
             jfn_config::set_server_url(&list_string(a, 0));
             jfn_config::settings_save_async();

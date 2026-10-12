@@ -79,6 +79,31 @@ the tree must be clean, the locked metadata check must pass, all relevant
 workflow filters must match the tag, and the affected platform artifacts must
 be buildable.
 
+## Update Detection and Release Propagation
+
+Release assets appearing on GitHub does not by itself prove that clients can
+detect an update. Before diagnosing a client, allow every platform workflow to
+finish; a release build can take up to 30 minutes. Then verify the GitHub
+latest-release API returns the expected tag, the release is not draft, and the
+architecture-specific assets are attached to that same release.
+
+The client update path has two separate contracts that must both be checked:
+
+- The renderer updater calls `/repos/eaforlife/jellium-desktop-eajelly/releases/latest`,
+  compares the release tag with the embedded app version, and selects the
+  exact Windows installer suffix (`-windows-x64-setup.exe` or
+  `-windows-arm64-setup.exe`). The injected `__UPDATE_ASSET_SUFFIX__` must be
+  replaced at runtime; a literal placeholder makes every asset lookup fail.
+- The selected asset is handed to native `installUpdate`, which must be in the
+  CEF injection function list and routed to the trusted installer verifier.
+  Verify the URL prefix, SHA-256 digest, declared size, and installer `MZ`
+  header before launch.
+
+When changing release or updater code, test the packaged artifact—not only the
+workspace build—by opening About and by checking the automatic update prompt
+against a newer release. Record the release tag, asset names, workflow
+completion state, API response, and client log before changing version logic.
+
 ## Before Version Tags / Releases
 Before committing a new version or creating a release tag, run the same locked
 metadata lookup used by CI:
