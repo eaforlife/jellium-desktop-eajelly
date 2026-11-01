@@ -423,13 +423,27 @@ unsafe extern "system" fn mpv_minmax_hook(n_code: c_int, wp: WPARAM, lp: LPARAM)
         let msg = unsafe { &*(lp.0 as *const CWPSTRUCT) };
         let target_hwnd_raw = STATE.lock().mpv_hwnd_raw;
         if msg.hwnd.0 as usize == target_hwnd_raw
-            && msg.message == WM_GETMINMAXINFO
-            && msg.lParam.0 != 0
             && let Some(minimum) = STATE.lock().picture_in_picture_minimum
         {
-            let minmax = unsafe { &mut *(msg.lParam.0 as *mut MINMAXINFO) };
-            minmax.ptMinTrackSize.x = minmax.ptMinTrackSize.x.max(minimum.w);
-            minmax.ptMinTrackSize.y = minmax.ptMinTrackSize.y.max(minimum.h);
+            match msg.message {
+                WM_GETMINMAXINFO if msg.lParam.0 != 0 => {
+                    let minmax = unsafe { &mut *(msg.lParam.0 as *mut MINMAXINFO) };
+                    minmax.ptMinTrackSize.x = minmax.ptMinTrackSize.x.max(minimum.w);
+                    minmax.ptMinTrackSize.y = minmax.ptMinTrackSize.y.max(minimum.h);
+                }
+                WM_SIZING if msg.lParam.0 != 0 => {
+                    let rect = unsafe { &mut *(msg.lParam.0 as *mut RECT) };
+                    constrain_pip_sizing_rect(rect, msg.wParam.0 as u32, minimum);
+                }
+                WM_WINDOWPOSCHANGING if msg.lParam.0 != 0 => {
+                    let pos = unsafe { &mut *(msg.lParam.0 as *mut WINDOWPOS) };
+                    if !pos.flags.contains(SWP_NOSIZE) {
+                        pos.cx = pos.cx.max(minimum.w);
+                        pos.cy = pos.cy.max(minimum.h);
+                    }
+                }
+                _ => {}
+            }
         }
     }
     let hook_raw = STATE.lock().minmax_hook_raw;
@@ -457,25 +471,7 @@ unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM
         let msg = unsafe { &*(lp.0 as *const CWPRETSTRUCT) };
         let target_hwnd_raw = STATE.lock().mpv_hwnd_raw;
         if (msg.hwnd.0 as usize) == target_hwnd_raw {
-            let minimum = STATE.lock().picture_in_picture_minimum;
             match msg.message {
-                WM_SIZING
-                    if msg.lParam.0 != 0
-                        && let Some(minimum) = minimum =>
-                {
-                    let rect = unsafe { &mut *(msg.lParam.0 as *mut RECT) };
-                    constrain_pip_sizing_rect(rect, msg.wParam.0 as u32, minimum);
-                }
-                WM_WINDOWPOSCHANGING
-                    if msg.lParam.0 != 0
-                        && let Some(minimum) = minimum =>
-                {
-                    let pos = unsafe { &mut *(msg.lParam.0 as *mut WINDOWPOS) };
-                    if !pos.flags.contains(SWP_NOSIZE) {
-                        pos.cx = pos.cx.max(minimum.w);
-                        pos.cy = pos.cy.max(minimum.h);
-                    }
-                }
                 WM_SIZE if msg.wParam.0 == SIZE_MINIMIZED as usize => {
                     if !std::mem::replace(&mut STATE.lock().was_minimized, true) {
                         jfn_playback::lifecycle::jfn_lifecycle_set_visible(false);
