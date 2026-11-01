@@ -52,6 +52,7 @@ struct WinState {
     input_thread: Option<JoinHandle<()>>,
     picture_in_picture_restore: Option<(RECT, isize)>,
     picture_in_picture_minimum: Option<PhysicalSize>,
+    picture_in_picture_subtitles: Option<(f64, bool, bool)>,
 }
 
 impl WinState {
@@ -64,11 +65,36 @@ impl WinState {
             input_thread: None,
             picture_in_picture_restore: None,
             picture_in_picture_minimum: None,
+            picture_in_picture_subtitles: None,
         }
     }
 }
 
 static STATE: Mutex<WinState> = Mutex::new(WinState::new());
+
+fn win_read_pip_subtitle_settings() -> Option<(f64, bool, bool)> {
+    let mut scale = 0.0;
+    let mut scale_by_window = 0;
+    let mut scale_with_window = 0;
+    let success = unsafe {
+        jfn_mpv::api::jfn_mpv_get_property_double(c"sub-scale".as_ptr(), &mut scale) == 0
+            && jfn_mpv::api::jfn_mpv_get_property_flag(
+                c"sub-scale-by-window".as_ptr(),
+                &mut scale_by_window,
+            ) == 0
+            && jfn_mpv::api::jfn_mpv_get_property_flag(
+                c"sub-scale-with-window".as_ptr(),
+                &mut scale_with_window,
+            ) == 0
+    };
+    success.then_some((scale, scale_by_window != 0, scale_with_window != 0))
+}
+
+fn win_set_pip_subtitle_settings(scale: f64, scale_by_window: bool, scale_with_window: bool) {
+    jfn_mpv::api::jfn_mpv_set_option_flag("sub-scale-by-window", scale_by_window);
+    jfn_mpv::api::jfn_mpv_set_option_flag("sub-scale-with-window", scale_with_window);
+    jfn_mpv::api::jfn_mpv_set_option_double("sub-scale", scale);
+}
 
 fn hwnd_from_raw(raw: usize) -> HWND {
     HWND(raw as *mut c_void)
@@ -224,6 +250,7 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
         };
         let size = fit_display_fraction(display, aspect_ratio, DEFAULT_SCREEN_FRACTION);
         let minimum_size = fit_display_fraction(display, aspect_ratio, MINIMUM_SCREEN_FRACTION);
+        let subtitle_settings = win_read_pip_subtitle_settings();
         let x = info.rcWork.right - size.w;
         let y = info.rcWork.bottom - size.h;
         let original_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
@@ -234,6 +261,7 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
             }
             state.picture_in_picture_restore = Some((restore, original_style));
             state.picture_in_picture_minimum = Some(minimum_size);
+            state.picture_in_picture_subtitles = subtitle_settings;
         }
         let pip_style = (original_style as u32
             & !(WS_CAPTION.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0))
@@ -267,9 +295,15 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
             let mut state = STATE.lock();
             state.picture_in_picture_restore = None;
             state.picture_in_picture_minimum = None;
+            state.picture_in_picture_subtitles = None;
             return;
         }
-        jfn_mpv::api::jfn_mpv_set_option_flag("sub-scale-with-window", false);
+        if let Some(settings) = subtitle_settings {
+            // Compensate for mpv's window-relative font shrink at the initial
+            // PiP size; keep window-relative scaling enabled for user resizing.
+            let subtitle_scale = (settings.0 * (display.h as f64 / size.h as f64)).min(100.0);
+            win_set_pip_subtitle_settings(subtitle_scale, true, true);
+        }
         jfn_platform_abi::picture_in_picture::notify(true);
     } else {
         let restore = STATE.lock().picture_in_picture_restore;
@@ -291,10 +325,13 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
         .is_ok()
         {
             let mut state = STATE.lock();
+            let subtitle_settings = state.picture_in_picture_subtitles.take();
             state.picture_in_picture_restore = None;
             state.picture_in_picture_minimum = None;
             drop(state);
-            jfn_mpv::api::jfn_mpv_set_option_flag("sub-scale-with-window", true);
+            if let Some(settings) = subtitle_settings {
+                win_set_pip_subtitle_settings(settings.0, settings.1, settings.2);
+            }
             jfn_platform_abi::picture_in_picture::notify(false);
         } else {
             let current_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };

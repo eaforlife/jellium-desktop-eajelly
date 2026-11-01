@@ -132,29 +132,13 @@ must be in the CEF injection allowlist, routed by `business_web`, and
 implemented by the platform backend. Keep playback-finished/canceled/error
 events clearing the browser PiP state, and test both entering and exiting PiP
 after a video ends.
-In PiP, keep the native window frameless and always on top, with native move and
-resize support, a draggable top band that excludes the close button, a default
-screen fraction 15% larger than the user's quarter-screen reference size, and
-a minimum size of `MINIMUM_SCREEN_FRACTION` that keeps the control bar in frame.
-Enforce the resize minimum through the Windows `WM_GETMINMAXINFO` path and do
-not hold the window-state mutex while handling window messages or calling
-Win32 APIs. Reuse Jellyfin's live `.videoOsdBottom` controls and preserve the
-server's control and menu styling; change only visibility, layout, and
-proportional sizing. Keep straight seek-back/seek-forward, Play/Pause, and
-Volume; hide Previous/Next track, curved rewind/forward, Audio, Subtitles, and
-the PiP toggle in this PiP layout. Preserve Jellyfin's control styling while
-reducing proportional button sizing. During PiP, use mpv's video-relative
-subtitle scaling so subtitles remain legible as the viewport shrinks; restore
-window-relative subtitle scaling when PiP exits. Let
-Jellyfin's OSD auto-hide behavior control the bar, and reveal it on player
-pointer/focus activity. Scale controls from the PiP player's own width and keep
-the pointer visible over them. Show the Jellyfin volume slider only while its
-control is hovered or focused, and hide its value bubble when inactive.
-Do not expose Audio or Subtitles buttons or selection menus in PiP. A
-pointer-down inside a fading OSD must reveal and activate the control under
-that first click. Validate the reduced controls, volume adjustment, cursor
-visibility, minimum resize, subtitle readability, and OSD auto-hide in the
-packaged app.
+PiP uses a frameless, topmost, movable, resizable native window with a close
+button and a minimum size that keeps controls in frame. Reuse Jellyfin's live
+`.videoOsdBottom` controls; show only Play/Pause, Mute/Volume, and skip
+back/forward. Preserve Jellyfin's layout, colors, and theme; limit CSS changes
+to visibility and proportional sizing. Keep Jellyfin's OSD auto-hide and
+first-click reveal behavior. Scale subtitles up for the PiP viewport, then
+restore the original MPV subtitle options when PiP closes.
 
 For the `windows` crate APIs, check the generated return type before writing
 error handling: APIs such as `SetWindowPos` return `Result<(), Error>` and

@@ -405,8 +405,6 @@
     let pictureInPictureButton = null;
     let videoOsdVisible = false;
     let videoPlaybackActive = false;
-    let pictureInPictureMenuRequested = false;
-    let pictureInPictureMenuOpened = false;
 
     // Expose signal emitter for native code
     window._nativeEmit = function(signal, ...args) {
@@ -460,15 +458,10 @@
                 element.getAttribute('aria-label'), element.textContent])
             .map(value => String(value || '').toLowerCase())
             .join(' ');
-        if (/btnrewind|fast_rewind|replay_?10/.test(identity)) return 'curved-seek-back';
-        if (/btnfastforward|fast_forward|forward_?10/.test(identity)) return 'curved-seek-forward';
-        if (/btnskipback|seek.?back|skip.?back/.test(identity)) return 'seek-back';
-        if (/btnskipforward|seek.?forward|skip.?forward/.test(identity)) return 'seek-forward';
-        if (/btnprevious|previoustrack|skip_previous|previous track/.test(identity)) return 'previous';
-        if (/btnnext|nexttrack|skip_next|next track/.test(identity)) return 'next';
+        if (/btnskipback|skip.?back/.test(identity)) return 'seek-back';
+        if (/btnskipforward|skip.?forward/.test(identity)) return 'seek-forward';
         if (/btnpause|btnplay|play_pause|play pause|\bpause\b|\bplay\b|play_arrow/.test(identity)) return 'play-pause';
-        if (/btnaudiotracks|btnaudio|\baudio\b|audio track|audio language|audiotrack|music_note/.test(identity)) return 'audio';
-        if (/btnsubtitles|subtitle|captions|closed caption|\bcc\b/.test(identity)) return 'subtitles';
+        if (/btnmute|volume_(off|up|down|mute)|\bmute\b/.test(identity)) return 'volume';
         return null;
     }
 
@@ -505,71 +498,6 @@
         }
     }
 
-    function markPictureInPictureSelectionMenus() {
-        const selectors = '[role="dialog"], [role="menu"], [role="listbox"], ' +
-            '.dialog, .dialogContainer, .selectMenu, .selectMenuPage, .selectMenuContent, ' +
-            '.selectMenuContainer, .selectDialog, #selectMenuPage, .actionSheet, .actionSheetContent';
-        const menus = [...document.querySelectorAll(selectors)].filter(menu => {
-            const style = getComputedStyle(menu);
-            const bounds = menu.getBoundingClientRect();
-            return !menu.hidden && menu.getAttribute('aria-hidden') !== 'true'
-                && style.display !== 'none' && Number(style.opacity) > 0
-                && bounds.width > 0 && bounds.height > 0;
-        });
-        for (const menu of document.querySelectorAll('[data-jmp-pip-menu="1"]')) {
-            if (!menus.includes(menu)) {
-                menu.removeAttribute('data-jmp-pip-menu');
-                menu.removeAttribute('data-jmp-pip-menu-positioned');
-            }
-        }
-        if (!window._isPictureInPicture || !pictureInPictureMenuRequested) return;
-        const selectionMenus = menus.filter(menu => !menu.closest('.videoOsdBottom'));
-        for (const menu of selectionMenus) {
-            if (menu.dataset.jmpPipMenu !== '1') {
-                menu.dataset.jmpPipMenu = '1';
-                if (getComputedStyle(menu).position === 'static') {
-                    menu.dataset.jmpPipMenuPositioned = '1';
-                }
-            }
-        }
-        if (selectionMenus.length > 0) pictureInPictureMenuOpened = true;
-        if (selectionMenus.length === 0 && pictureInPictureMenuOpened) {
-            pictureInPictureMenuRequested = false;
-            pictureInPictureMenuOpened = false;
-            document.documentElement.classList.remove('jmp-pip-menu-requested');
-        }
-    }
-
-    function closePictureInPictureSelectionMenus() {
-        if (!window._isPictureInPicture || !pictureInPictureMenuRequested) return false;
-        markPictureInPictureSelectionMenus();
-        const menus = [...document.querySelectorAll('[data-jmp-pip-menu="1"]')];
-        if (menus.length === 0) return false;
-
-        for (const menu of menus.filter(candidate =>
-            !candidate.parentElement?.closest('[data-jmp-pip-menu="1"]'))) {
-            if (menu instanceof HTMLDialogElement && menu.open) {
-                menu.close();
-                continue;
-            }
-            const closeButton = menu.querySelector(
-                '.btnClose, .btnCancel, .closeButton, button[aria-label="Close"], button[title="Close"]'
-            );
-            if (closeButton instanceof HTMLElement) closeButton.click();
-        }
-        document.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'Escape',
-            code: 'Escape',
-            bubbles: true,
-            cancelable: true
-        }));
-        document.documentElement.classList.remove('jmp-pip-menu-requested');
-        pictureInPictureMenuRequested = false;
-        pictureInPictureMenuOpened = false;
-        requestAnimationFrame(markPictureInPictureSelectionMenus);
-        return true;
-    }
-
     function markPictureInPictureControls(root) {
         if (!(root instanceof Element) && root !== document) return;
         const candidates = [];
@@ -587,11 +515,6 @@
         if (window._isPictureInPicture) {
             markPictureInPictureControls(document);
             markPictureInPicturePlayerControls(document);
-            markPictureInPictureSelectionMenus();
-        } else {
-            pictureInPictureMenuRequested = false;
-            pictureInPictureMenuOpened = false;
-            document.documentElement.classList.remove('jmp-pip-menu-requested');
         }
         if (pictureInPictureButton) {
             pictureInPictureHost.dataset.visible =
@@ -836,28 +759,20 @@
         css += '\nhtml.jmp-pip-active .videoOsdBottom:not(.videoOsdBottom-hidden):hover, html.jmp-pip-active .videoOsdBottom:not(.videoOsdBottom-hidden):focus-within { opacity: 1 !important; visibility: visible !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom * { visibility: hidden !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .osdControls > .flex, html.jmp-pip-active .videoOsdBottom .osdTextContainer, html.jmp-pip-active .videoOsdBottom .osdPositionText, html.jmp-pip-active .videoOsdBottom .osdDurationText, html.jmp-pip-active .videoOsdBottom .endsAtText, html.jmp-pip-active .videoOsdBottom .osdMainTextContainer { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons { display: flex !important; visibility: visible !important; align-items: center !important; justify-content: center !important; gap: 0 !important; width: max-content !important; max-width: 100% !important; margin: 0 auto !important; padding: 0 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons { visibility: visible !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons > *:not([data-jmp-pip-control-group="1"]) { display: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):not([data-jmp-pip-control]) { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(.btnRewind, .btnSkipBack, .btnPause, .btnPlay) { display: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons, html.jmp-pip-active .videoOsdBottom .buttons * { visibility: hidden !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control-group="1"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control] *, html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume] * { display: flex !important; visibility: visible !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex: 0 0 auto !important; width: 8.5cqw !important; height: 7.2cqw !important; min-width: 8.5cqw !important; min-height: 7.2cqw !important; margin: 0 0.25cqw !important; cursor: pointer !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="previous"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="next"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="curved-seek-back"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="curved-seek-forward"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="audio"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="subtitles"] { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light :is(.material-icons, .material-symbols-rounded, .material-symbols-outlined) { font-size: 3.6cqw !important; line-height: 1 !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):hover, html.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):focus { position: relative !important; z-index: 2147483645 !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .volumeButtons[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 auto !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; max-width: 0 !important; margin: 0 !important; padding: 0 !important; opacity: 0 !important; visibility: hidden !important; overflow: hidden !important; pointer-events: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control-group="1"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control] *, html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume] * { visibility: visible !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { width: 7.5cqw !important; height: 6.5cqw !important; min-width: 7.5cqw !important; min-height: 6.5cqw !important; margin: 0 0.2cqw !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light :is(.material-icons, .material-symbols-rounded, .material-symbols-outlined) { font-size: 3.2cqw !important; line-height: 1 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; max-width: 0 !important; margin: 0 !important; padding: 0 !important; opacity: 0 !important; visibility: hidden !important; overflow: hidden !important; pointer-events: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .osdVolumeSliderContainer[data-jmp-pip-volume] { flex-basis: 10cqw !important; width: 10cqw !important; min-width: 10cqw !important; max-width: 10cqw !important; margin: 0 0.5cqw !important; opacity: 1 !important; visibility: visible !important; overflow: visible !important; pointer-events: auto !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .sliderBubble { display: none !important; visibility: hidden !important; opacity: 0 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .sliderBubble { display: block !important; visibility: visible !important; opacity: 1 !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .osdVolumeSliderContainer[data-jmp-pip-volume] .mdl-slider-container, html.jmp-pip-active .videoOsdBottom .osdVolumeSliderContainer[data-jmp-pip-volume] input[type="range"] { display: block !important; width: 100% !important; opacity: 1 !important; visibility: visible !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .osdVolumeSliderContainer[data-jmp-pip-volume] .mdl-slider-container, html.jmp-pip-active .videoOsdBottom .osdVolumeSliderContainer[data-jmp-pip-volume] input[type="range"] { width: 100% !important; opacity: 1 !important; visibility: visible !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom, html.jmp-pip-active .videoOsdBottom * { cursor: default !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom :is(button, [role="button"], .paper-icon-button-light), html.jmp-pip-active .videoOsdBottom input[type="range"] { cursor: pointer !important; }';
-        css += '\nhtml.jmp-pip-active [data-jmp-pip-menu="1"], html.jmp-pip-active [data-jmp-pip-menu="1"] * { visibility: visible !important; }';
-        css += '\nhtml.jmp-pip-active [data-jmp-pip-menu="1"] { z-index: 2147483646 !important; }';
-        css += '\nhtml.jmp-pip-active [data-jmp-pip-menu-positioned="1"] { position: relative !important; }';
-        css += '\nhtml.jmp-pip-active [data-jmp-pip-menu="1"]:not(.dialogContainer) { max-width: 80cqw !important; max-height: 80cqh !important; font-size: 2.5cqw !important; overflow: auto !important; }';
         css += '\nhtml.jmp-pip-active [role="tooltip"], html.jmp-pip-active .tooltip, html.jmp-pip-active .paper-tooltip, html.jmp-pip-active .buttonTooltip, html.jmp-pip-active .button-tooltip { z-index: 2147483645 !important; }';
 
         // Hide scrollbars app-wide (scroll still works via wheel/trackpad/keys).
@@ -897,9 +812,6 @@
                     }
                 }
             }
-            if (window._isPictureInPicture && pictureInPictureMenuRequested) {
-                markPictureInPictureSelectionMenus();
-            }
         }).observe(document.body, {
             childList: true,
             subtree: true,
@@ -932,31 +844,6 @@
                     }
                 }
             }
-            if (!pictureInPictureMenuRequested) return;
-            if (event.target.closest('[data-jmp-pip-menu="1"], .videoOsdBottom [data-jmp-pip-control]')) return;
-            closePictureInPictureSelectionMenus();
-        }, true);
-
-        document.addEventListener('click', event => {
-            if (!window._isPictureInPicture || !(event.target instanceof Element)) return;
-            const control = event.target.closest('.videoOsdBottom [data-jmp-pip-control]');
-            if (!control) return;
-            const kind = control.dataset.jmpPipControl;
-            const selectionControl = kind === 'audio' || kind === 'subtitles';
-            if (selectionControl && pictureInPictureMenuRequested) {
-                closePictureInPictureSelectionMenus();
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                return;
-            }
-            if (!selectionControl) {
-                closePictureInPictureSelectionMenus();
-                return;
-            }
-            pictureInPictureMenuRequested = true;
-            pictureInPictureMenuOpened = false;
-            document.documentElement.classList.add('jmp-pip-menu-requested');
-            requestAnimationFrame(markPictureInPictureSelectionMenus);
         }, true);
 
         // The PiP close overlay follows the same visibility signal as the

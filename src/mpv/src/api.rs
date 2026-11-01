@@ -160,6 +160,17 @@ pub fn jfn_mpv_set_option_flag(name: &str, value: bool) {
     }
 }
 
+/// Set a numeric mpv option/property without exposing C-string lifetime details.
+pub fn jfn_mpv_set_option_double(name: &str, value: f64) {
+    let Ok(name) = CString::new(name) else {
+        tracing::warn!(target: "mpv", "ignoring option update containing a NUL byte");
+        return;
+    };
+    unsafe {
+        jfn_mpv_set_property_double_async(name.as_ptr(), value);
+    }
+}
+
 /// Apply settings that libmpv supports while it is running. Options that
 /// affect decoder/audio creation are also applied by the next media load via
 /// the normal boot path, so this remains correct when changed while idle.
@@ -189,6 +200,46 @@ pub unsafe fn jfn_mpv_get_property_int(name: *const c_char, out: *mut i64) -> i3
             h,
             n.as_ptr(),
             sys::mpv_format::MPV_FORMAT_INT64,
+            out as *mut c_void,
+        )
+    }
+}
+
+/// Sync flag property read. Writes 0 or 1 into `*out` and returns libmpv's
+/// error code (0 on success, negative on failure).
+pub unsafe fn jfn_mpv_get_property_flag(name: *const c_char, out: *mut i32) -> i32 {
+    let h = raw();
+    if h.is_null() || out.is_null() {
+        return -4;
+    }
+    let Some(n) = (unsafe { cstr(name) }) else {
+        return -4;
+    };
+    unsafe {
+        sys::mpv_get_property(
+            h,
+            n.as_ptr(),
+            sys::mpv_format::MPV_FORMAT_FLAG,
+            out as *mut c_void,
+        )
+    }
+}
+
+/// Sync double property read. Writes the value into `*out` and returns
+/// libmpv's error code (0 on success, negative on failure).
+pub unsafe fn jfn_mpv_get_property_double(name: *const c_char, out: *mut f64) -> i32 {
+    let h = raw();
+    if h.is_null() || out.is_null() {
+        return -4;
+    }
+    let Some(n) = (unsafe { cstr(name) }) else {
+        return -4;
+    };
+    unsafe {
+        sys::mpv_get_property(
+            h,
+            n.as_ptr(),
+            sys::mpv_format::MPV_FORMAT_DOUBLE,
             out as *mut c_void,
         )
     }
