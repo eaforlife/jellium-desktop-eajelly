@@ -460,6 +460,8 @@
                 element.getAttribute('aria-label'), element.textContent])
             .map(value => String(value || '').toLowerCase())
             .join(' ');
+        if (/btnrewind|fast_rewind|replay_?10|seek.?back|skip.?back/.test(identity)) return 'seek-back';
+        if (/btnfastforward|fast_forward|forward_?10|seek.?forward|skip.?forward/.test(identity)) return 'seek-forward';
         if (/btnprevious|previoustrack|skip_previous|previous track/.test(identity)) return 'previous';
         if (/btnnext|nexttrack|skip_next|next track/.test(identity)) return 'next';
         if (/btnpause|btnplay|play_pause|play pause|\bpause\b|\bplay\b|play_arrow/.test(identity)) return 'play-pause';
@@ -503,8 +505,8 @@
 
     function markPictureInPictureSelectionMenus() {
         const selectors = '[role="dialog"], [role="menu"], [role="listbox"], ' +
-            '.dialogContainer, .selectMenu, .selectMenuPage, .selectMenuContent, ' +
-            '.selectMenuContainer, .selectDialog, #selectMenuPage, .actionSheet';
+            '.dialog, .dialogContainer, .selectMenu, .selectMenuPage, .selectMenuContent, ' +
+            '.selectMenuContainer, .selectDialog, #selectMenuPage, .actionSheet, .actionSheetContent';
         const menus = [...document.querySelectorAll(selectors)].filter(menu => {
             const style = getComputedStyle(menu);
             const bounds = menu.getBoundingClientRect();
@@ -835,11 +837,12 @@
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons { display: flex !important; visibility: visible !important; align-items: center !important; justify-content: center !important; gap: 0 !important; width: max-content !important; max-width: 100% !important; margin: 0 auto !important; padding: 0 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons > *:not([data-jmp-pip-control-group="1"]) { display: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):not([data-jmp-pip-control]) { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(.btnRewind, .btnFastForward, .btnSkipBack, .btnSkipForward, .btnPause, .btnPlay) { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(.btnRewind, .btnSkipBack, .btnPause, .btnPlay) { display: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons, html.jmp-pip-active .videoOsdBottom .buttons * { visibility: hidden !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control-group="1"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control] *, html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume] * { display: flex !important; visibility: visible !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex: 0 0 auto !important; width: 4cqw !important; height: 4cqw !important; min-width: 4cqw !important; min-height: 4cqw !important; margin: 0 0.15cqw !important; cursor: pointer !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light .material-icons { font-size: 2.2cqw !important; line-height: 1 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="seek-back"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="play-pause"] { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex: 0 0 auto !important; width: 10cqw !important; height: 8.5cqw !important; min-width: 10cqw !important; min-height: 8.5cqw !important; margin: 0 0.3cqw !important; cursor: pointer !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light :is(.material-icons, .material-symbols-rounded, .material-symbols-outlined) { font-size: 4.2cqw !important; line-height: 1 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):hover, html.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):focus { position: relative !important; z-index: 2147483645 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .volumeButtons[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 auto !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; max-width: 0 !important; margin: 0 !important; padding: 0 !important; opacity: 0 !important; visibility: hidden !important; overflow: hidden !important; pointer-events: none !important; }';
@@ -852,6 +855,7 @@
         css += '\nhtml.jmp-pip-active [data-jmp-pip-menu="1"], html.jmp-pip-active [data-jmp-pip-menu="1"] * { visibility: visible !important; }';
         css += '\nhtml.jmp-pip-active [data-jmp-pip-menu="1"] { z-index: 2147483646 !important; }';
         css += '\nhtml.jmp-pip-active [data-jmp-pip-menu-positioned="1"] { position: relative !important; }';
+        css += '\nhtml.jmp-pip-active [data-jmp-pip-menu="1"]:not(.dialogContainer) { max-width: 80cqw !important; max-height: 80cqh !important; font-size: 2.5cqw !important; overflow: auto !important; }';
         css += '\nhtml.jmp-pip-active [role="tooltip"], html.jmp-pip-active .tooltip, html.jmp-pip-active .paper-tooltip, html.jmp-pip-active .buttonTooltip, html.jmp-pip-active .button-tooltip { z-index: 2147483645 !important; }';
 
         // Hide scrollbars app-wide (scroll still works via wheel/trackpad/keys).
@@ -909,8 +913,24 @@
         document.addEventListener('focusin', revealPictureInPictureControls, true);
 
         document.addEventListener('pointerdown', event => {
-            if (!window._isPictureInPicture || !pictureInPictureMenuRequested
-                || !(event.target instanceof Element)) return;
+            if (!window._isPictureInPicture || !(event.target instanceof Element)) return;
+            const osd = document.querySelector('.videoOsdBottom');
+            if (osd?.classList.contains('videoOsdBottom-hidden')) {
+                const bounds = osd.getBoundingClientRect();
+                if (event.clientX >= bounds.left && event.clientX <= bounds.right
+                    && event.clientY >= bounds.top && event.clientY <= bounds.bottom) {
+                    osd.classList.remove('videoOsdBottom-hidden');
+                    const clickedControl = document.elementFromPoint(event.clientX, event.clientY)
+                        ?.closest('.videoOsdBottom [data-jmp-pip-control]');
+                    if (clickedControl) {
+                        event.preventDefault();
+                        event.stopImmediatePropagation();
+                        clickedControl.click();
+                        return;
+                    }
+                }
+            }
+            if (!pictureInPictureMenuRequested) return;
             if (event.target.closest('[data-jmp-pip-menu="1"], .videoOsdBottom [data-jmp-pip-control]')) return;
             closePictureInPictureSelectionMenus();
         }, true);

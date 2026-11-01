@@ -140,15 +140,18 @@ Enforce the resize minimum through the Windows `WM_GETMINMAXINFO` path and do
 not hold the window-state mutex while handling window messages or calling
 Win32 APIs. Reuse Jellyfin's live `.videoOsdBottom` controls and preserve the
 server's control and menu styling; change only visibility, layout, and
-proportional sizing. Keep track Previous/Next, Audio, Subtitles, and Volume;
-hide seek-back/forward, Play/Pause, and the PiP toggle in this PiP layout. Let
+proportional sizing. Keep Previous/Next, seek-forward, Audio, Subtitles, and
+Volume; hide seek-back, Play/Pause, and the PiP toggle in this PiP layout. Let
 Jellyfin's OSD auto-hide behavior control the bar, and reveal it on player
 pointer/focus activity. Scale controls from the PiP player's own width and keep
 the pointer visible over them. Show the Jellyfin volume slider only while its
 control is hovered or focused, and hide its value bubble when inactive.
 Audio/subtitle selection menus must render above the controls, open at most once,
 close on outside clicks or another player control, and toggle closed when their
-own button is clicked again. Validate menu ordering, outside-click dismissal,
+own button is clicked again. A pointer-down inside a fading OSD must reveal and
+activate the control under that first click. Scale selection menus to the PiP
+viewport while retaining server colors and component styling. Validate menu
+ordering/size, outside-click dismissal, first-click behavior during OSD fade,
 volume adjustment, cursor visibility, minimum resize, and OSD auto-hide in the
 packaged app.
 
