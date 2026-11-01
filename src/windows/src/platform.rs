@@ -24,9 +24,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PostMessageW, SC_MOVE, SIZE_MINIMIZED, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowLongPtrW,
     SetWindowPos, SetWindowsHookExW, SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROC,
-    WH_CALLWNDPROCRET, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_CLOSE, WM_DPICHANGED,
-    WM_GETMINMAXINFO, WM_MOVE, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WS_CAPTION, WS_MAXIMIZEBOX,
-    WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    WH_CALLWNDPROCRET, WINDOWPOS, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_CLOSE,
+    WM_DPICHANGED, WM_GETMINMAXINFO, WM_MOVE, WM_SIZE, WM_SIZING, WM_STYLECHANGED, WM_SYSCOMMAND,
+    WM_WINDOWPOSCHANGING, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT,
+    WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use jfn_mpv::api::{
@@ -365,9 +366,16 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
             STATE.lock().picture_in_picture_foreground_hook = Some(hook.0 as usize);
         }
     } else {
-        let restore = STATE.lock().picture_in_picture_restore;
-        let Some((restore, original_style)) = restore else {
-            return;
+        let (restore, original_style, minimum) = {
+            let mut state = STATE.lock();
+            let Some((restore, original_style)) = state.picture_in_picture_restore else {
+                return;
+            };
+            (
+                restore,
+                original_style,
+                state.picture_in_picture_minimum.take(),
+            )
         };
         unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, original_style) };
         if unsafe {
@@ -400,6 +408,7 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
             }
             jfn_platform_abi::picture_in_picture::notify(false);
         } else {
+            STATE.lock().picture_in_picture_minimum = minimum;
             let current_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
             let pip_style = (current_style as u32
                 & !(WS_CAPTION.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0))
@@ -428,12 +437,45 @@ unsafe extern "system" fn mpv_minmax_hook(n_code: c_int, wp: WPARAM, lp: LPARAM)
     unsafe { CallNextHookEx(Some(hook), n_code, wp, lp) }
 }
 
+fn constrain_pip_sizing_rect(rect: &mut RECT, edge: u32, minimum: PhysicalSize) {
+    if rect.right - rect.left < minimum.w {
+        match edge {
+            WMSZ_LEFT | WMSZ_TOPLEFT | WMSZ_BOTTOMLEFT => rect.left = rect.right - minimum.w,
+            _ => rect.right = rect.left + minimum.w,
+        }
+    }
+    if rect.bottom - rect.top < minimum.h {
+        match edge {
+            WMSZ_TOP | WMSZ_TOPLEFT | WMSZ_TOPRIGHT => rect.top = rect.bottom - minimum.h,
+            _ => rect.bottom = rect.top + minimum.h,
+        }
+    }
+}
+
 unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if n_code >= 0 {
         let msg = unsafe { &*(lp.0 as *const CWPRETSTRUCT) };
         let target_hwnd_raw = STATE.lock().mpv_hwnd_raw;
         if (msg.hwnd.0 as usize) == target_hwnd_raw {
+            let minimum = STATE.lock().picture_in_picture_minimum;
             match msg.message {
+                WM_SIZING
+                    if msg.lParam.0 != 0
+                        && let Some(minimum) = minimum =>
+                {
+                    let rect = unsafe { &mut *(msg.lParam.0 as *mut RECT) };
+                    constrain_pip_sizing_rect(rect, msg.wParam.0 as u32, minimum);
+                }
+                WM_WINDOWPOSCHANGING
+                    if msg.lParam.0 != 0
+                        && let Some(minimum) = minimum =>
+                {
+                    let pos = unsafe { &mut *(msg.lParam.0 as *mut WINDOWPOS) };
+                    if !pos.flags.contains(SWP_NOSIZE) {
+                        pos.cx = pos.cx.max(minimum.w);
+                        pos.cy = pos.cy.max(minimum.h);
+                    }
+                }
                 WM_SIZE if msg.wParam.0 == SIZE_MINIMIZED as usize => {
                     if !std::mem::replace(&mut STATE.lock().was_minimized, true) {
                         jfn_playback::lifecycle::jfn_lifecycle_set_visible(false);
