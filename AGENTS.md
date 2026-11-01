@@ -133,10 +133,11 @@ implemented by the platform backend. Keep playback-finished/canceled/error
 events clearing the browser PiP state, and test both entering and exiting PiP
 after a video ends.
 PiP is frameless, topmost, movable, and resizable with a minimum control-safe
-size. Reuse Jellyfin's `.videoOsdBottom`; show only Play/Pause, Mute/Volume,
-and skip back/forward without changing server styles. Follow Jellyfin's OSD
-fade and first-click reveal. Scale subtitles to the PiP viewport and restore
-MPV options on exit. Reassert topmost order when foreground apps change.
+size. Reuse Jellyfin's live `.videoOsdBottom`; identify Play/Pause, rewind and
+fast-forward, and Mute/Volume from live button classes, labels, or icons rather
+than relying on wrapper layout. Preserve server styles and OSD fade behavior.
+Scale subtitles to the PiP viewport, restore MPV options on exit, and reassert
+topmost order when foreground apps change.
 
 For the `windows` crate APIs, check the generated return type before writing
 error handling: APIs such as `SetWindowPos` return `Result<(), Error>` and

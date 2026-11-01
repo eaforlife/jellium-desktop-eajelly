@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - '*.*.*-eajelly*'
+      - 'v*.*.*-eajelly*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

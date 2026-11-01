@@ -2,8 +2,8 @@ use crate::paths;
 use anyhow::{Context, Result, anyhow};
 
 pub struct Version {
-    /// "<raw>[+<short-hash>[-dirty]]" — adds git suffix iff raw is a
-    /// pre-release (has a "-suffix").
+    /// Adds a Git suffix to non-tag prereleases, but keeps release-tag builds
+    /// identical to the tag's version string.
     pub full: String,
     /// Numeric `major.minor.patch` form for platform metadata that rejects
     /// SemVer pre-release/build suffixes (notably macOS bundle versions).
@@ -28,12 +28,18 @@ pub fn read() -> Result<Version> {
     let raw = env!("CARGO_PKG_VERSION").to_string();
     #[cfg(target_os = "macos")]
     let numeric = raw.split('-').next().unwrap_or(&raw).to_string();
-    let full = match (raw.contains('-'), git_info()) {
-        (true, (Some(hash), dirty)) => {
-            let suffix = if dirty { "-dirty" } else { "" };
-            format!("{raw}+{hash}{suffix}")
+    let is_tag_build = matches!(std::env::var("GITHUB_REF_TYPE").as_deref(), Ok("tag"))
+        && std::env::var("GITHUB_REF_NAME").is_ok_and(|name| name == format!("v{raw}"));
+    let full = if raw.contains('-') && !is_tag_build {
+        match git_info() {
+            (Some(hash), dirty) => {
+                let suffix = if dirty { "-dirty" } else { "" };
+                format!("{raw}+{hash}{suffix}")
+            }
+            _ => raw,
         }
-        _ => raw,
+    } else {
+        raw
     };
     Ok(Version {
         full,

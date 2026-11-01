@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.2.6-eajelly
+
+- Updated upstream dependencies and platform APIs.
+- Added resizable Windows PiP with Jellyfin controls, MPV subtitles, and topmost recovery.
+
 ## 3.2.0
 
 - Integrated upstream lifecycle, rendering, input, and dependency updates.

@@ -2660,7 +2660,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jfn-cef"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "cef",
  "crossbeam-channel",
@@ -2689,18 +2689,18 @@ dependencies = [
 
 [[package]]
 name = "jfn-color"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "parking_lot",
 ]
 
 [[package]]
 name = "jfn-compositor-core"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 
 [[package]]
 name = "jfn-config"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "gethostname",
  "jfn-mailbox",
@@ -2714,7 +2714,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-gpu-paint"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "ash",
  "nix",
@@ -2734,7 +2734,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-input"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "jfn-platform-abi",
  "jfn-playback",
@@ -2743,7 +2743,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-instance-ipc"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "interprocess",
  "jfn-paths",
@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-jellyfin"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "serde",
  "serde_json",
@@ -2766,7 +2766,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-js-json"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "serde",
  "serde_json",
@@ -2774,7 +2774,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-linux-util"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "clap",
  "cursor-icon",
@@ -2795,7 +2795,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-logging"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "jfn-wake-event",
  "memchr",
@@ -2811,7 +2811,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-macos"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "cef",
  "dispatch2",
@@ -2839,7 +2839,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-macos-sink"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "block2",
  "jfn-playback",
@@ -2853,14 +2853,14 @@ dependencies = [
 
 [[package]]
 name = "jfn-mailbox"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "parking_lot",
 ]
 
 [[package]]
 name = "jfn-mpris"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "async-io",
  "jfn-mpv",
@@ -2872,7 +2872,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-mpv"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "bindgen",
  "crossbeam-channel",
@@ -2885,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-paths"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "dirs",
  "nix",
@@ -2895,7 +2895,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-platform-abi"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "cef",
  "jfn-gpu-paint",
@@ -2910,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-playback"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-utils",
@@ -2924,7 +2924,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-rust"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "clap",
  "embed-resource",
@@ -2966,7 +2966,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-wake-event"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "calloop",
  "nix",
@@ -2975,7 +2975,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-wayland"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "calloop",
  "calloop-wayland-source",
@@ -3006,7 +3006,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-windows"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "cef",
  "jfn-compositor-core",
@@ -3025,7 +3025,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-windows-sink"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "jfn-playback",
  "tracing",
@@ -3035,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "jfn-x11"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "arc-swap",
  "calloop",
@@ -6124,7 +6124,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "3.2.5"
+version = "3.2.6-eajelly"
 dependencies = [
  "anyhow",
  "cargo-lock",
