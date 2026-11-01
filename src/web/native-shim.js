@@ -463,8 +463,8 @@
         if (/btnprevious|previoustrack|skip_previous|previous track/.test(identity)) return 'previous';
         if (/btnnext|nexttrack|skip_next|next track/.test(identity)) return 'next';
         if (/btnpause|btnplay|play_pause|play pause|\bpause\b|\bplay\b|play_arrow/.test(identity)) return 'play-pause';
-        if (/btnaudiotracks|audio track|audio language|audiotrack/.test(identity)) return 'audio';
-        if (/btnsubtitles|subtitle|captions|closed caption/.test(identity)) return 'subtitles';
+        if (/btnaudiotracks|btnaudio|\baudio\b|audio track|audio language|audiotrack|music_note/.test(identity)) return 'audio';
+        if (/btnsubtitles|subtitle|captions|closed caption|\bcc\b/.test(identity)) return 'subtitles';
         return null;
     }
 
@@ -484,7 +484,7 @@
             ? root : root.querySelector?.('.videoOsdBottom') || document.querySelector('.videoOsdBottom');
         if (!osd) return;
 
-        for (const button of osd.querySelectorAll('button')) {
+        for (const button of osd.querySelectorAll('button, [role="button"], .paper-icon-button-light')) {
             const kind = pictureInPictureControlKind(button);
             if (kind) {
                 button.dataset.jmpPipControl = kind;
@@ -494,7 +494,7 @@
         for (const volume of osd.querySelectorAll('.volumeButtons, .osdVolumeSliderContainer')) {
             volume.dataset.jmpPipVolume = '1';
             markPictureInPictureControlGroup(volume);
-            for (const button of volume.querySelectorAll('button')) {
+            for (const button of volume.querySelectorAll('button, [role="button"], .paper-icon-button-light')) {
                 button.dataset.jmpPipControl = 'volume';
                 markPictureInPictureControlGroup(button);
             }
@@ -529,20 +529,13 @@
     }
 
     function closePictureInPictureSelectionMenus() {
-        const selectors = '[role="dialog"], [role="menu"], [role="listbox"], ' +
-            '.dialogContainer, .selectMenu, .selectMenuPage, .selectMenuContent, ' +
-            '.selectMenuContainer, .selectDialog, #selectMenuPage, .actionSheet';
-        const menus = [...document.querySelectorAll(selectors)].filter(menu => {
-            if (menu.closest('.videoOsdBottom')) return false;
-            const style = getComputedStyle(menu);
-            const bounds = menu.getBoundingClientRect();
-            return !menu.hidden && menu.getAttribute('aria-hidden') !== 'true'
-                && style.display !== 'none' && Number(style.opacity) > 0
-                && bounds.width > 0 && bounds.height > 0;
-        });
+        if (!window._isPictureInPicture || !pictureInPictureMenuRequested) return false;
+        markPictureInPictureSelectionMenus();
+        const menus = [...document.querySelectorAll('[data-jmp-pip-menu="1"]')];
         if (menus.length === 0) return false;
 
-        for (const menu of menus.filter(candidate => !candidate.parentElement?.closest(selectors))) {
+        for (const menu of menus.filter(candidate =>
+            !candidate.parentElement?.closest('[data-jmp-pip-menu="1"]'))) {
             if (menu instanceof HTMLDialogElement && menu.open) {
                 menu.close();
                 continue;
@@ -826,22 +819,29 @@
         css += '\n@keyframes mpv-video-zoomin { from { transform: scale3d(0.2, 0.2, 0.2); opacity: 0.6; } to { transform: none; opacity: initial; } }';
         css += '\nhtml.jmp-pip-active [data-jmp-picture-in-picture-control="1"] { display: none !important; }';
         css += '\nhtml.jmp-pip-active body { visibility: hidden !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom { display: block !important; position: fixed !important; left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important; width: 100% !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 12px 10px 10px !important; box-sizing: border-box !important; transform: none !important; opacity: 1 !important; visibility: visible !important; z-index: 2147483644 !important; background: linear-gradient(transparent, rgba(0,0,0,.72) 30%, rgba(0,0,0,.88)) !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom.videoOsdBottom-hidden { opacity: 1 !important; transform: none !important; visibility: visible !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom { container-type: inline-size !important; display: block !important; position: fixed !important; left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important; width: 100% !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 1.4cqw 1.2cqw 1.1cqw !important; box-sizing: border-box !important; transform: none !important; opacity: 1 !important; visibility: visible !important; z-index: 2147483644 !important; background: linear-gradient(transparent, rgba(0,0,0,.68) 30%, rgba(0,0,0,.84)) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom.videoOsdBottom-hidden { opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom:not(.videoOsdBottom-hidden):hover, html.jmp-pip-active .videoOsdBottom:not(.videoOsdBottom-hidden):focus-within { opacity: 1 !important; visibility: visible !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom * { visibility: hidden !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .osdControls > .flex, html.jmp-pip-active .videoOsdBottom .osdTextContainer, html.jmp-pip-active .videoOsdBottom .osdPositionText, html.jmp-pip-active .videoOsdBottom .osdDurationText, html.jmp-pip-active .videoOsdBottom .endsAtText, html.jmp-pip-active .videoOsdBottom .osdMainTextContainer { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons { display: flex !important; visibility: visible !important; align-items: center !important; justify-content: center !important; gap: clamp(2px, 1vw, 10px) !important; width: max-content !important; max-width: 100% !important; margin: 0 auto !important; padding: 4px 10px !important; border: 1px solid rgba(255,255,255,.14) !important; border-radius: 999px !important; background: rgba(18,20,24,.72) !important; box-shadow: 0 4px 18px rgba(0,0,0,.34) !important; backdrop-filter: blur(12px) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons { display: flex !important; visibility: visible !important; align-items: center !important; justify-content: center !important; gap: 0 !important; width: max-content !important; max-width: 100% !important; margin: 0 auto !important; padding: 0.55cqw 1cqw !important; border: 1px solid rgba(255,255,255,.14) !important; border-radius: 999px !important; background: rgba(18,20,24,.72) !important; box-shadow: 0 4px 18px rgba(0,0,0,.34) !important; backdrop-filter: blur(12px) !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons > *:not([data-jmp-pip-control-group="1"]) { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons button:not([data-jmp-pip-control]) { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):not([data-jmp-pip-control]) { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(.btnRewind, .btnFastForward, .btnSkipBack, .btnSkipForward) { display: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons, html.jmp-pip-active .videoOsdBottom .buttons * { visibility: hidden !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control-group="1"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control] *, html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume] * { display: flex !important; visibility: visible !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex: 0 0 auto !important; width: clamp(28px, 7vmin, 42px) !important; height: clamp(28px, 7vmin, 42px) !important; min-width: clamp(28px, 7vmin, 42px) !important; min-height: clamp(28px, 7vmin, 42px) !important; margin: 0 !important; padding: 0 !important; border: 0 !important; border-radius: 50% !important; background: transparent !important; color: rgba(255,255,255,.94) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex: 0 0 auto !important; width: 4cqw !important; height: 4cqw !important; min-width: 4cqw !important; min-height: 4cqw !important; margin: 0 0.15cqw !important; padding: 0 !important; border: 0 !important; border-radius: 50% !important; background: transparent !important; color: rgba(255,255,255,.94) !important; cursor: pointer !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light:hover { background: rgba(255,255,255,.14) !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light .material-icons { font-size: clamp(18px, 4.2vmin, 24px) !important; line-height: 1 !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .btnPause.paper-icon-button-light { width: clamp(32px, 8vmin, 48px) !important; height: clamp(32px, 8vmin, 48px) !important; min-width: clamp(32px, 8vmin, 48px) !important; min-height: clamp(32px, 8vmin, 48px) !important; background: rgba(255,255,255,.16) !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .volumeButtons[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 auto !important; gap: 2px !important; margin: 0 !important; padding: 0 !important; background: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 1 clamp(56px, 12vw, 112px) !important; width: clamp(56px, 12vw, 112px) !important; min-width: 48px !important; max-width: 112px !important; margin: 0 4px !important; opacity: 1 !important; visibility: visible !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] .mdl-slider-container, html.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] input[type="range"] { display: block !important; width: 100% !important; opacity: 1 !important; visibility: visible !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light .material-icons { font-size: 2.2cqw !important; line-height: 1 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .btnPause.paper-icon-button-light { width: 4.5cqw !important; height: 4.5cqw !important; min-width: 4.5cqw !important; min-height: 4.5cqw !important; background: rgba(255,255,255,.16) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .volumeButtons[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 auto !important; gap: 0 !important; margin: 0 !important; padding: 0 !important; background: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; max-width: 0 !important; margin: 0 !important; padding: 0 !important; opacity: 0 !important; visibility: hidden !important; overflow: hidden !important; pointer-events: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .osdVolumeSliderContainer[data-jmp-pip-volume] { flex-basis: 10cqw !important; width: 10cqw !important; min-width: 10cqw !important; max-width: 10cqw !important; margin: 0 0.5cqw !important; opacity: 1 !important; visibility: visible !important; overflow: visible !important; pointer-events: auto !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .sliderBubble { display: none !important; visibility: hidden !important; opacity: 0 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .sliderBubble { display: block !important; visibility: visible !important; opacity: 1 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .osdVolumeSliderContainer[data-jmp-pip-volume] .mdl-slider-container, html.jmp-pip-active .videoOsdBottom .osdVolumeSliderContainer[data-jmp-pip-volume] input[type="range"] { display: block !important; width: 100% !important; opacity: 1 !important; visibility: visible !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom, html.jmp-pip-active .videoOsdBottom * { cursor: default !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom :is(button, [role="button"], .paper-icon-button-light), html.jmp-pip-active .videoOsdBottom input[type="range"] { cursor: pointer !important; }';
         css += '\nhtml.jmp-pip-active [data-jmp-pip-menu="1"], html.jmp-pip-active [data-jmp-pip-menu="1"] * { visibility: visible !important; }';
 
         // Hide scrollbars app-wide (scroll still works via wheel/trackpad/keys).
@@ -890,6 +890,13 @@
             attributes: true,
             attributeFilter: ['class', 'style', 'aria-hidden', 'hidden']
         });
+
+        const revealPictureInPictureControls = () => {
+            if (!window._isPictureInPicture) return;
+            document.querySelector('.videoOsdBottom')?.classList.remove('videoOsdBottom-hidden');
+        };
+        document.addEventListener('pointermove', revealPictureInPictureControls, true);
+        document.addEventListener('focusin', revealPictureInPictureControls, true);
 
         document.addEventListener('click', event => {
             if (!window._isPictureInPicture || !(event.target instanceof Element)) return;

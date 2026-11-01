@@ -132,14 +132,21 @@ must be in the CEF injection allowlist, routed by `business_web`, and
 implemented by the platform backend. Keep playback-finished/canceled/error
 events clearing the browser PiP state, and test both entering and exiting PiP
 after a video ends.
-In PiP, reuse Jellyfin's live `.videoOsdBottom` controls and restyle that DOM;
-do not replace playback, audio, subtitle, or volume actions with app-owned
-lookalikes. Keep only the compact transport/audio/subtitle/volume controls,
-hide the PiP toggle, and keep the player surface clickable for play/pause.
-Keep Jellyfin's volume slider visible even when its normal hover behavior is
-disabled. Audio/subtitle selection menus must remain visible in PiP, close when
-another player control is used, and toggle closed when their own button is
-clicked again instead of opening duplicate dialogs.
+In PiP, keep the native window frameless and always on top, with native move and
+resize support, a draggable top band that excludes the close button, and a
+default footprint guided by the user's quarter-screen reference. Reuse
+Jellyfin's live `.videoOsdBottom` controls and restyle that DOM; do not replace
+playback, audio, subtitle, or volume actions with app-owned lookalikes. Keep the
+track Previous/Next controls (not the separate seek-back/forward controls),
+Play/Pause, Audio, Subtitles, and Volume; hide the PiP toggle. Let Jellyfin's
+OSD auto-hide behavior control the bar, and reveal it on player pointer/focus
+activity. Scale the controls from the PiP player's own width. Keep the pointer
+visible over the controls. Show the Jellyfin volume slider only while its
+control is hovered or focused, and hide its value bubble when inactive.
+Audio/subtitle selection menus must remain visible in PiP, close when another
+player control is used, and toggle closed when their own button is clicked
+again instead of opening duplicate dialogs. Validate menu opening, menu closing,
+volume adjustment, cursor visibility, and OSD auto-hide in the packaged app.
 
 For the `windows` crate APIs, check the generated return type before writing
 error handling: APIs such as `SetWindowPos` return `Result<(), Error>` and
