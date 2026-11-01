@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 
 use crate::PhysicalSize;
 
-pub const DEFAULT_SCREEN_FRACTION: f64 = 0.25;
+pub const DEFAULT_SCREEN_FRACTION: f64 = 0.20;
 pub const MINIMUM_SCREEN_FRACTION: f64 = 0.15;
 pub const MAXIMUM_SCREEN_FRACTION: f64 = 0.50;
 
@@ -63,14 +63,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn landscape_video_fits_quarter_of_display() {
+    fn landscape_video_fits_one_fifth_of_display() {
         assert_eq!(
             fit_display_fraction(
                 PhysicalSize { w: 1920, h: 1080 },
                 16.0 / 9.0,
                 DEFAULT_SCREEN_FRACTION,
             ),
-            PhysicalSize { w: 480, h: 270 }
+            PhysicalSize { w: 384, h: 216 }
         );
     }
 
@@ -82,7 +82,7 @@ mod tests {
                 9.0 / 16.0,
                 DEFAULT_SCREEN_FRACTION,
             ),
-            PhysicalSize { w: 152, h: 270 }
+            PhysicalSize { w: 122, h: 216 }
         );
     }
 

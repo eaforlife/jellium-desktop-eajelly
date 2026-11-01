@@ -475,22 +475,36 @@
             pictureInPictureButton.setAttribute('aria-label', pictureInPictureButton.title);
         }
         if (pictureInPictureCloseHost) {
-            pictureInPictureCloseHost.dataset.visible =
-                window._isPictureInPicture && videoOsdVisible ? '1' : '0';
+            pictureInPictureCloseHost.dataset.visible = window._isPictureInPicture ? '1' : '0';
         }
+    }
+
+    function makePictureInPictureIcon() {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.innerHTML = '<path fill="currentColor" d="M19 11h-8v6h8v-6zm2 8V5H3v14h18zM5 7h14v10H5V7z"/>';
+        return svg;
     }
 
     function buildPictureInPictureButton() {
         if (pictureInPictureButton || !window.jmpNative?.setPictureInPicture) return;
-        const host = document.createElement('jmp-pip-control');
-        host.style.cssText = 'position:fixed!important;left:max(60px,6vw)!important;top:12px!important;' +
-            'z-index:2147483646!important;display:block!important;width:40px!important;height:40px!important;' +
-            'pointer-events:auto!important;';
-        const root = host.attachShadow({ mode: 'closed' });
-        const style = document.createElement('style');
-        style.textContent = ':host([data-visible="0"]) { display:none!important; }';
+        const controls = document.querySelector('.videoOsdBottom .buttons, .videoOsdBottom');
+        if (!controls) return;
+        const serverButton = [...document.querySelectorAll('button')].find(isPictureInPictureControl);
+        if (serverButton) {
+            pictureInPictureButton = serverButton;
+            pictureInPictureHost = serverButton;
+            serverButton.dataset.jmpPictureInPictureControl = '1';
+            updatePictureInPictureUi();
+            return;
+        }
         const button = document.createElement('button');
         button.type = 'button';
+        button.className = 'paper-icon-button-light';
+        button.title = 'Picture-in-picture';
+        button.setAttribute('aria-label', button.title);
+        button.dataset.jmpPictureInPictureControl = '1';
         button.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
@@ -501,14 +515,11 @@
                 window.jmpNative.setPictureInPicture(!window._isPictureInPicture, 1);
             }
         });
-        button.style.cssText = 'position:fixed;left:max(60px,6vw);top:12px;z-index:2147483646;' +
-            'width:40px;height:40px;border:0;border-radius:4px;background:rgba(20,20,20,.82);' +
-            'color:#fff;cursor:pointer;font:18px sans-serif;box-shadow:0 1px 4px #0008;';
-        button.textContent = '▣';
-        root.append(style, button);
-        pictureInPictureHost = host;
+        button.style.cssText = 'color:inherit;';
+        pictureInPictureHost = button;
+        button.replaceChildren(makePictureInPictureIcon());
+        controls.appendChild(button);
         pictureInPictureButton = button;
-        document.documentElement.appendChild(host);
         updatePictureInPictureUi();
     }
 
@@ -521,11 +532,6 @@
             :host { position: fixed; inset: 0; z-index: 2147483647;
                     display: none; pointer-events: none; }
             :host([data-visible="1"]) { display: block; }
-            .drag { position: absolute; top: 0; left: 48px; right: 62px; height: 44px;
-                    pointer-events: auto; cursor: move; }
-            .drag::after { content: ''; position: absolute; top: 8px; left: 50%; width: 40px;
-                           height: 4px; transform: translateX(-50%); border-radius: 2px;
-                           background: rgba(255, 255, 255, .72); box-shadow: 0 1px 3px rgba(0, 0, 0, .65); }
             button { all: unset; position: absolute; top: 12px; right: 12px;
                      box-sizing: border-box; width: 38px; height: 38px;
                      border-radius: 50%; background: rgba(20, 20, 20, .72); color: white;
@@ -551,16 +557,7 @@
                 window.jmpNative.setPictureInPicture(false, 1);
             }
         });
-        const drag = document.createElement('div');
-        drag.className = 'drag';
-        drag.title = 'Drag picture-in-picture';
-        drag.addEventListener('mousedown', event => {
-            if (event.button !== 0) return;
-            event.preventDefault();
-            event.stopPropagation();
-            if (window.jmpNative?.windowStartMove) window.jmpNative.windowStartMove();
-        });
-        root.append(style, drag, button);
+        root.append(style, button);
         pictureInPictureCloseHost = host;
         document.documentElement.appendChild(host);
         updatePictureInPictureUi();
@@ -694,6 +691,7 @@
         let css = 'body.mouseIdle, body.mouseIdle * { cursor: none !important; }';
         css += '\n@keyframes mpv-video-zoomin { from { transform: scale3d(0.2, 0.2, 0.2); opacity: 0.6; } to { transform: none; opacity: initial; } }';
         css += '\nhtml.jmp-pip-active [data-jmp-picture-in-picture-control="1"] { display: none !important; }';
+        css += '\nhtml.jmp-pip-active body { visibility: hidden !important; }';
 
         // Hide scrollbars app-wide (scroll still works via wheel/trackpad/keys).
         if (jmpInfo.settings.advanced.hideScrollbar) {
@@ -724,7 +722,10 @@
         new MutationObserver((mutations) => {
             for (const mutation of mutations) {
                 for (const node of mutation.addedNodes) {
-                    if (node instanceof Element) markPictureInPictureControls(node);
+                    if (node instanceof Element) {
+                        markPictureInPictureControls(node);
+                        if (!pictureInPictureButton) buildPictureInPictureButton();
+                    }
                 }
             }
         }).observe(document.body, { childList: true, subtree: true });

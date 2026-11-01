@@ -22,7 +22,19 @@ pub fn ensure(root: &Path) -> Result<PathBuf> {
     let target = download_cef::DEFAULT_TARGET;
     let cef_version = download_cef::default_version(&version::cef_package_version()?);
     let (versioned, cef_dir) = resolve(root)?;
-    if cef_dir.exists() {
+    let cef_sdk_present = cef_dir.join("CMakeLists.txt").is_file()
+        && cef_dir.join("include").is_dir()
+        && cef_dir.join("libcef_dll").is_dir();
+    if cef_dir.exists() && cef_sdk_present {
+        if !cef_dir.join("archive.json").exists() {
+            let url = download_cef::default_download_url();
+            let index = download_cef::CefIndex::download_from(&url).map_err(|e| anyhow!("{e}"))?;
+            let platform = index.platform(target).map_err(|e| anyhow!("{e}"))?;
+            let version = platform.version(&cef_version).map_err(|e| anyhow!("{e}"))?;
+            version
+                .write_archive_json(&cef_dir)
+                .context("write CEF cache archive metadata")?;
+        }
         return Ok(cef_dir);
     }
     let url = download_cef::default_download_url();

@@ -225,12 +225,13 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
             STATE.lock().picture_in_picture_restore = None;
             return;
         }
+        jfn_platform_abi::picture_in_picture::notify(true);
     } else {
-        let restore = STATE.lock().picture_in_picture_restore.take();
+        let restore = STATE.lock().picture_in_picture_restore;
         let Some(restore) = restore else {
             return;
         };
-        let _ = unsafe {
+        if unsafe {
             SetWindowPos(
                 hwnd,
                 Some(HWND_NOTOPMOST),
@@ -240,7 +241,12 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
                 restore.bottom - restore.top,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
-        };
+        }
+        .is_ok()
+        {
+            STATE.lock().picture_in_picture_restore = None;
+            jfn_platform_abi::picture_in_picture::notify(false);
+        }
     }
 }
 

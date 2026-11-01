@@ -70,6 +70,13 @@ wrap_context_menu_handler! {
             model: Option<&mut MenuModel>,
             callback: Option<&mut RunContextMenuCallback>,
         ) -> c_int {
+            if jfn_platform_abi::picture_in_picture::active() {
+                if let Some(callback) = callback {
+                    callback.cancel();
+                    return 1;
+                }
+                return 0;
+            }
             let (Some(_browser), Some(params), Some(model), Some(callback)) =
                 (browser, params, model, callback)
             else {
