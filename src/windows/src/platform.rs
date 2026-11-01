@@ -343,7 +343,8 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
         if let Some(settings) = subtitle_settings {
             // Compensate for mpv's window-relative font shrink at the initial
             // PiP size; keep window-relative scaling enabled for user resizing.
-            let subtitle_scale = (settings.0 * (display.h as f64 / size.h as f64) * 0.8).min(100.0);
+            let subtitle_scale =
+                (settings.0 * (display.h as f64 / size.h as f64) * 0.8 * 0.8).min(100.0);
             win_set_pip_subtitle_settings(subtitle_scale, true, true);
         }
         jfn_platform_abi::picture_in_picture::notify(true);

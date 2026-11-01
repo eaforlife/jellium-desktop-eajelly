@@ -458,8 +458,8 @@
                 element.getAttribute('aria-label'), element.textContent])
             .map(value => String(value || '').toLowerCase())
             .join(' ');
-        if (/btnskipback|btnrewind|fast_rewind|replay_?10|skip.?back|seek.?back/.test(identity)) return 'seek-back';
-        if (/btnskipforward|btnfastforward|fast_forward|forward_?10|skip.?forward|seek.?forward/.test(identity)) return 'seek-forward';
+        if (/btnskipback|btnrewind|fast_rewind|replay_?10|rewind|skip.?back|seek.?back|backward/.test(identity)) return 'seek-back';
+        if (/btnskipforward|btnfastforward|fast_forward|forward_?10|fast.?forward|skip.?forward|seek.?forward/.test(identity)) return 'seek-forward';
         if (/btnpause|btnplay|play_pause|play pause|\bpause\b|\bplay\b|play_arrow/.test(identity)) return 'play-pause';
         if (/btnmute|volume_(off|up|down|mute)|\bmute\b/.test(identity)) return 'volume';
         return null;
@@ -766,18 +766,17 @@
         css += '\nhtml.jmp-pip-active .videoOsdBottom.videoOsdBottom-hidden { opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom:not(.videoOsdBottom-hidden):hover, html.jmp-pip-active .videoOsdBottom:not(.videoOsdBottom-hidden):focus-within { opacity: 1 !important; visibility: visible !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom * { visibility: hidden !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .osdControls > .flex, html.jmp-pip-active .videoOsdBottom .osdTextContainer, html.jmp-pip-active .videoOsdBottom .osdPositionText, html.jmp-pip-active .videoOsdBottom .osdDurationText, html.jmp-pip-active .videoOsdBottom .endsAtText, html.jmp-pip-active .videoOsdBottom .osdMainTextContainer { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons { visibility: visible !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons > *:not([data-jmp-pip-control-group="1"]) { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):not([data-jmp-pip-control]) { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .osdTextContainer, html.jmp-pip-active .videoOsdBottom .osdPositionText, html.jmp-pip-active .videoOsdBottom .osdDurationText, html.jmp-pip-active .videoOsdBottom .endsAtText, html.jmp-pip-active .videoOsdBottom .osdMainTextContainer { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom :is(button, [role="button"], .paper-icon-button-light):not([data-jmp-pip-control]):not(:has([data-jmp-pip-control])) { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom :is(button, [role="button"], .paper-icon-button-light)[data-jmp-pip-control] { display: inline-flex !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons, html.jmp-pip-active .videoOsdBottom .buttons * { visibility: hidden !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control-group="1"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control] *, html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume] * { visibility: visible !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { width: 7.5cqw !important; height: 6.5cqw !important; min-width: 7.5cqw !important; min-height: 6.5cqw !important; margin: 0 0.2cqw !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light :is(.material-icons, .material-symbols-rounded, .material-symbols-outlined) { font-size: 3.2cqw !important; line-height: 1 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom [data-jmp-pip-control-group="1"], html.jmp-pip-active .videoOsdBottom [data-jmp-pip-control], html.jmp-pip-active .videoOsdBottom [data-jmp-pip-control] *, html.jmp-pip-active .videoOsdBottom [data-jmp-pip-volume], html.jmp-pip-active .videoOsdBottom [data-jmp-pip-volume] * { visibility: visible !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .paper-icon-button-light { width: 7.5cqw !important; height: 6.5cqw !important; min-width: 7.5cqw !important; min-height: 6.5cqw !important; margin: 0 0.2cqw !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .paper-icon-button-light :is(.material-icons, .material-symbols-rounded, .material-symbols-outlined) { font-size: 3.2cqw !important; line-height: 1 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; max-width: 0 !important; margin: 0 !important; padding: 0 !important; opacity: 0 !important; visibility: hidden !important; overflow: hidden !important; pointer-events: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .osdVolumeSliderContainer[data-jmp-pip-volume] { flex-basis: 15cqw !important; width: 15cqw !important; min-width: 15cqw !important; max-width: 15cqw !important; margin: 0 0.5cqw !important; opacity: 1 !important; visibility: visible !important; overflow: visible !important; pointer-events: auto !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .osdVolumeSliderContainer[data-jmp-pip-volume] { flex-basis: 15cqw !important; width: 15cqw !important; min-width: 15cqw !important; max-width: 15cqw !important; margin: 0 0.5cqw !important; opacity: 1 !important; visibility: visible !important; overflow: visible !important; pointer-events: auto !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .sliderBubble { display: none !important; visibility: hidden !important; opacity: 0 !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .sliderBubble { display: block !important; visibility: visible !important; opacity: 1 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .sliderBubble { display: block !important; visibility: visible !important; opacity: 1 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .osdVolumeSliderContainer[data-jmp-pip-volume] .mdl-slider-container, html.jmp-pip-active .videoOsdBottom .osdVolumeSliderContainer[data-jmp-pip-volume] input[type="range"] { width: 100% !important; opacity: 1 !important; visibility: visible !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom, html.jmp-pip-active .videoOsdBottom * { cursor: default !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom :is(button, [role="button"], .paper-icon-button-light), html.jmp-pip-active .videoOsdBottom input[type="range"] { cursor: pointer !important; }';
