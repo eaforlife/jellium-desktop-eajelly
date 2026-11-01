@@ -405,6 +405,8 @@
     let pictureInPictureButton = null;
     let videoOsdVisible = false;
     let videoPlaybackActive = false;
+    let pictureInPictureMenuRequested = false;
+    let pictureInPictureMenuOpened = false;
 
     // Expose signal emitter for native code
     window._nativeEmit = function(signal, ...args) {
@@ -452,6 +454,80 @@
             .includes(icon.textContent.trim().toLowerCase());
     }
 
+    function pictureInPictureControlKind(button) {
+        const identity = [button, ...button.querySelectorAll('*')]
+            .flatMap(element => [element.className, element.id, element.title,
+                element.getAttribute('aria-label'), element.textContent])
+            .map(value => String(value || '').toLowerCase())
+            .join(' ');
+        if (/btnprevious|previoustrack|skip_previous|previous track/.test(identity)) return 'previous';
+        if (/btnnext|nexttrack|skip_next|next track/.test(identity)) return 'next';
+        if (/btnpause|btnplay|play_pause|play pause|\bpause\b|\bplay\b|play_arrow/.test(identity)) return 'play-pause';
+        if (/btnaudiotracks|audio track|audio language|audiotrack/.test(identity)) return 'audio';
+        if (/btnsubtitles|subtitle|captions|closed caption/.test(identity)) return 'subtitles';
+        return null;
+    }
+
+    function markPictureInPictureControlGroup(element) {
+        const group = element.closest('.buttons');
+        if (!group) return;
+        let child = element;
+        while (child.parentElement && child.parentElement !== group) {
+            child = child.parentElement;
+        }
+        child.dataset.jmpPipControlGroup = '1';
+    }
+
+    function markPictureInPicturePlayerControls(root) {
+        if (!(root instanceof Element) && root !== document) return;
+        const osd = root.matches?.('.videoOsdBottom')
+            ? root : root.querySelector?.('.videoOsdBottom') || document.querySelector('.videoOsdBottom');
+        if (!osd) return;
+
+        for (const button of osd.querySelectorAll('button')) {
+            const kind = pictureInPictureControlKind(button);
+            if (kind) {
+                button.dataset.jmpPipControl = kind;
+                markPictureInPictureControlGroup(button);
+            }
+        }
+        for (const volume of osd.querySelectorAll('.volumeButtons, .osdVolumeSliderContainer')) {
+            volume.dataset.jmpPipVolume = '1';
+            markPictureInPictureControlGroup(volume);
+            for (const button of volume.querySelectorAll('button')) {
+                button.dataset.jmpPipControl = 'volume';
+                markPictureInPictureControlGroup(button);
+            }
+        }
+    }
+
+    function markPictureInPictureSelectionMenus() {
+        const selectors = '[role="dialog"], [role="menu"], [role="listbox"], ' +
+            '.dialogContainer, .selectMenu, .selectMenuPage, .selectMenuContent, ' +
+            '.selectMenuContainer, .selectDialog, #selectMenuPage, .actionSheet';
+        const menus = [...document.querySelectorAll(selectors)].filter(menu => {
+            const style = getComputedStyle(menu);
+            const bounds = menu.getBoundingClientRect();
+            return !menu.hidden && menu.getAttribute('aria-hidden') !== 'true'
+                && style.display !== 'none' && Number(style.opacity) > 0
+                && bounds.width > 0 && bounds.height > 0;
+        });
+        for (const menu of document.querySelectorAll('[data-jmp-pip-menu="1"]')) {
+            if (!menus.includes(menu)) menu.removeAttribute('data-jmp-pip-menu');
+        }
+        if (!window._isPictureInPicture || !pictureInPictureMenuRequested) return;
+        const selectionMenus = menus.filter(menu => !menu.closest('.videoOsdBottom'));
+        for (const menu of selectionMenus) {
+            if (menu.dataset.jmpPipMenu !== '1') menu.dataset.jmpPipMenu = '1';
+        }
+        if (selectionMenus.length > 0) pictureInPictureMenuOpened = true;
+        if (selectionMenus.length === 0 && pictureInPictureMenuOpened) {
+            pictureInPictureMenuRequested = false;
+            pictureInPictureMenuOpened = false;
+            document.documentElement.classList.remove('jmp-pip-menu-requested');
+        }
+    }
+
     function markPictureInPictureControls(root) {
         if (!(root instanceof Element) && root !== document) return;
         const candidates = [];
@@ -466,7 +542,15 @@
 
     function updatePictureInPictureUi() {
         document.documentElement.classList.toggle('jmp-pip-active', window._isPictureInPicture);
-        if (window._isPictureInPicture) markPictureInPictureControls(document);
+        if (window._isPictureInPicture) {
+            markPictureInPictureControls(document);
+            markPictureInPicturePlayerControls(document);
+            markPictureInPictureSelectionMenus();
+        } else {
+            pictureInPictureMenuRequested = false;
+            pictureInPictureMenuOpened = false;
+            document.documentElement.classList.remove('jmp-pip-menu-requested');
+        }
         if (pictureInPictureButton) {
             pictureInPictureHost.dataset.visible =
                 videoPlaybackActive && videoOsdVisible ? '1' : '0';
@@ -532,7 +616,10 @@
             :host { position: fixed; inset: 0; z-index: 2147483647;
                     display: none; pointer-events: none; }
             :host([data-visible="1"]) { display: block; }
-            .drag { position: absolute; inset: 0; pointer-events: auto; cursor: move; }
+            .drag { position: absolute; z-index: 0; top: 0; left: 0;
+                    right: calc(4vmin + clamp(22px, 10vmin, 38px));
+                    height: calc(4vmin + clamp(22px, 10vmin, 38px));
+                    pointer-events: auto; cursor: move; }
             button { all: unset; position: absolute; z-index: 1; top: 2vmin; right: 2vmin;
                      box-sizing: border-box; width: clamp(22px, 10vmin, 38px);
                      height: clamp(22px, 10vmin, 38px);
@@ -702,6 +789,19 @@
         css += '\n@keyframes mpv-video-zoomin { from { transform: scale3d(0.2, 0.2, 0.2); opacity: 0.6; } to { transform: none; opacity: initial; } }';
         css += '\nhtml.jmp-pip-active [data-jmp-picture-in-picture-control="1"] { display: none !important; }';
         css += '\nhtml.jmp-pip-active body { visibility: hidden !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom { display: block !important; position: fixed !important; left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important; width: 100% !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 4px 8px !important; transform: none !important; opacity: 1 !important; visibility: visible !important; z-index: 2147483644 !important; background: rgba(0,0,0,.72) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom.videoOsdBottom-hidden { opacity: 1 !important; transform: none !important; visibility: visible !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom * { visibility: hidden !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .osdControls > .flex, html.jmp-pip-active .videoOsdBottom .osdTextContainer, html.jmp-pip-active .videoOsdBottom .osdPositionText, html.jmp-pip-active .videoOsdBottom .osdDurationText, html.jmp-pip-active .videoOsdBottom .endsAtText, html.jmp-pip-active .videoOsdBottom .sliderContainer:not(.osdVolumeSliderContainer .sliderContainer) { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons { display: flex !important; visibility: visible !important; align-items: center !important; justify-content: center !important; gap: 2vmin !important; padding: 0 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons > *:not([data-jmp-pip-control-group="1"]) { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons button:not([data-jmp-pip-control]) { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons, html.jmp-pip-active .videoOsdBottom .buttons * { visibility: hidden !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control-group="1"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control] *, html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume] * { display: flex !important; visibility: visible !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control] { width: clamp(28px, 9vmin, 44px) !important; height: clamp(28px, 9vmin, 44px) !important; min-width: clamp(28px, 9vmin, 44px) !important; min-height: clamp(28px, 9vmin, 44px) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="play-pause"] { width: clamp(34px, 11vmin, 52px) !important; height: clamp(34px, 11vmin, 52px) !important; min-width: clamp(34px, 11vmin, 52px) !important; min-height: clamp(34px, 11vmin, 52px) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { width: clamp(56px, 18vmin, 88px) !important; }';
+        css += '\nhtml.jmp-pip-active [data-jmp-pip-menu="1"], html.jmp-pip-active [data-jmp-pip-menu="1"] * { visibility: visible !important; }';
 
         // Hide scrollbars app-wide (scroll still works via wheel/trackpad/keys).
         if (jmpInfo.settings.advanced.hideScrollbar) {
@@ -729,16 +829,38 @@
         buildPictureInPictureButton();
         buildPictureInPictureCloseButton();
         markPictureInPictureControls(document);
+        markPictureInPicturePlayerControls(document);
         new MutationObserver((mutations) => {
             for (const mutation of mutations) {
                 for (const node of mutation.addedNodes) {
                     if (node instanceof Element) {
                         markPictureInPictureControls(node);
+                        markPictureInPicturePlayerControls(node);
                         if (!pictureInPictureButton) buildPictureInPictureButton();
                     }
                 }
             }
-        }).observe(document.body, { childList: true, subtree: true });
+            if (window._isPictureInPicture && pictureInPictureMenuRequested) {
+                markPictureInPictureSelectionMenus();
+            }
+        }).observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class', 'style', 'aria-hidden', 'hidden']
+        });
+
+        document.addEventListener('click', event => {
+            if (!window._isPictureInPicture || !(event.target instanceof Element)) return;
+            const control = event.target.closest(
+                '[data-jmp-pip-control="audio"], [data-jmp-pip-control="subtitles"]'
+            );
+            if (!control) return;
+            pictureInPictureMenuRequested = true;
+            pictureInPictureMenuOpened = false;
+            document.documentElement.classList.add('jmp-pip-menu-requested');
+            requestAnimationFrame(markPictureInPictureSelectionMenus);
+        }, true);
 
         // The PiP close overlay follows the same visibility signal as the
         // player controls. macOS traffic lights continue to consume it too.
