@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 
 use crate::PhysicalSize;
 
-pub const DEFAULT_SCREEN_FRACTION: f64 = 0.35;
+pub const DEFAULT_SCREEN_FRACTION: f64 = 0.35 * 1.15;
 pub const MINIMUM_SCREEN_FRACTION: f64 = 0.15;
 pub const MAXIMUM_SCREEN_FRACTION: f64 = 0.50;
 
@@ -70,7 +70,7 @@ mod tests {
                 16.0 / 9.0,
                 DEFAULT_SCREEN_FRACTION,
             ),
-            PhysicalSize { w: 672, h: 378 }
+            PhysicalSize { w: 773, h: 435 }
         );
     }
 
@@ -82,7 +82,7 @@ mod tests {
                 9.0 / 16.0,
                 DEFAULT_SCREEN_FRACTION,
             ),
-            PhysicalSize { w: 213, h: 378 }
+            PhysicalSize { w: 245, h: 435 }
         );
     }
 

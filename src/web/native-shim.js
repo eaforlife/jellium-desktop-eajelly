@@ -513,12 +513,20 @@
                 && bounds.width > 0 && bounds.height > 0;
         });
         for (const menu of document.querySelectorAll('[data-jmp-pip-menu="1"]')) {
-            if (!menus.includes(menu)) menu.removeAttribute('data-jmp-pip-menu');
+            if (!menus.includes(menu)) {
+                menu.removeAttribute('data-jmp-pip-menu');
+                menu.removeAttribute('data-jmp-pip-menu-positioned');
+            }
         }
         if (!window._isPictureInPicture || !pictureInPictureMenuRequested) return;
         const selectionMenus = menus.filter(menu => !menu.closest('.videoOsdBottom'));
         for (const menu of selectionMenus) {
-            if (menu.dataset.jmpPipMenu !== '1') menu.dataset.jmpPipMenu = '1';
+            if (menu.dataset.jmpPipMenu !== '1') {
+                menu.dataset.jmpPipMenu = '1';
+                if (getComputedStyle(menu).position === 'static') {
+                    menu.dataset.jmpPipMenuPositioned = '1';
+                }
+            }
         }
         if (selectionMenus.length > 0) pictureInPictureMenuOpened = true;
         if (selectionMenus.length === 0 && pictureInPictureMenuOpened) {
@@ -819,22 +827,21 @@
         css += '\n@keyframes mpv-video-zoomin { from { transform: scale3d(0.2, 0.2, 0.2); opacity: 0.6; } to { transform: none; opacity: initial; } }';
         css += '\nhtml.jmp-pip-active [data-jmp-picture-in-picture-control="1"] { display: none !important; }';
         css += '\nhtml.jmp-pip-active body { visibility: hidden !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom { container-type: inline-size !important; display: block !important; position: fixed !important; left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important; width: 100% !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 1.4cqw 1.2cqw 1.1cqw !important; box-sizing: border-box !important; transform: none !important; opacity: 1 !important; visibility: visible !important; z-index: 2147483644 !important; background: linear-gradient(transparent, rgba(0,0,0,.68) 30%, rgba(0,0,0,.84)) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom { container-type: inline-size !important; display: block !important; position: fixed !important; left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important; width: 100% !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 1.4cqw 1.2cqw 1.1cqw !important; box-sizing: border-box !important; transform: none !important; opacity: 1 !important; visibility: visible !important; z-index: 2147483644 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom.videoOsdBottom-hidden { opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom:not(.videoOsdBottom-hidden):hover, html.jmp-pip-active .videoOsdBottom:not(.videoOsdBottom-hidden):focus-within { opacity: 1 !important; visibility: visible !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom * { visibility: hidden !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .osdControls > .flex, html.jmp-pip-active .videoOsdBottom .osdTextContainer, html.jmp-pip-active .videoOsdBottom .osdPositionText, html.jmp-pip-active .videoOsdBottom .osdDurationText, html.jmp-pip-active .videoOsdBottom .endsAtText, html.jmp-pip-active .videoOsdBottom .osdMainTextContainer { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons { display: flex !important; visibility: visible !important; align-items: center !important; justify-content: center !important; gap: 0 !important; width: max-content !important; max-width: 100% !important; margin: 0 auto !important; padding: 0.55cqw 1cqw !important; border: 1px solid rgba(255,255,255,.14) !important; border-radius: 999px !important; background: rgba(18,20,24,.72) !important; box-shadow: 0 4px 18px rgba(0,0,0,.34) !important; backdrop-filter: blur(12px) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons { display: flex !important; visibility: visible !important; align-items: center !important; justify-content: center !important; gap: 0 !important; width: max-content !important; max-width: 100% !important; margin: 0 auto !important; padding: 0 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons > *:not([data-jmp-pip-control-group="1"]) { display: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):not([data-jmp-pip-control]) { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(.btnRewind, .btnFastForward, .btnSkipBack, .btnSkipForward) { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(.btnRewind, .btnFastForward, .btnSkipBack, .btnSkipForward, .btnPause, .btnPlay) { display: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons, html.jmp-pip-active .videoOsdBottom .buttons * { visibility: hidden !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control-group="1"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control] *, html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume] * { display: flex !important; visibility: visible !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex: 0 0 auto !important; width: 4cqw !important; height: 4cqw !important; min-width: 4cqw !important; min-height: 4cqw !important; margin: 0 0.15cqw !important; padding: 0 !important; border: 0 !important; border-radius: 50% !important; background: transparent !important; color: rgba(255,255,255,.94) !important; cursor: pointer !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light:hover { background: rgba(255,255,255,.14) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex: 0 0 auto !important; width: 4cqw !important; height: 4cqw !important; min-width: 4cqw !important; min-height: 4cqw !important; margin: 0 0.15cqw !important; cursor: pointer !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light .material-icons { font-size: 2.2cqw !important; line-height: 1 !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .btnPause.paper-icon-button-light { width: 4.5cqw !important; height: 4.5cqw !important; min-width: 4.5cqw !important; min-height: 4.5cqw !important; background: rgba(255,255,255,.16) !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .volumeButtons[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 auto !important; gap: 0 !important; margin: 0 !important; padding: 0 !important; background: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):hover, html.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):focus { position: relative !important; z-index: 2147483645 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .volumeButtons[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 auto !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; max-width: 0 !important; margin: 0 !important; padding: 0 !important; opacity: 0 !important; visibility: hidden !important; overflow: hidden !important; pointer-events: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .osdVolumeSliderContainer[data-jmp-pip-volume] { flex-basis: 10cqw !important; width: 10cqw !important; min-width: 10cqw !important; max-width: 10cqw !important; margin: 0 0.5cqw !important; opacity: 1 !important; visibility: visible !important; overflow: visible !important; pointer-events: auto !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .sliderBubble { display: none !important; visibility: hidden !important; opacity: 0 !important; }';
@@ -843,6 +850,9 @@
         css += '\nhtml.jmp-pip-active .videoOsdBottom, html.jmp-pip-active .videoOsdBottom * { cursor: default !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom :is(button, [role="button"], .paper-icon-button-light), html.jmp-pip-active .videoOsdBottom input[type="range"] { cursor: pointer !important; }';
         css += '\nhtml.jmp-pip-active [data-jmp-pip-menu="1"], html.jmp-pip-active [data-jmp-pip-menu="1"] * { visibility: visible !important; }';
+        css += '\nhtml.jmp-pip-active [data-jmp-pip-menu="1"] { z-index: 2147483646 !important; }';
+        css += '\nhtml.jmp-pip-active [data-jmp-pip-menu-positioned="1"] { position: relative !important; }';
+        css += '\nhtml.jmp-pip-active [role="tooltip"], html.jmp-pip-active .tooltip, html.jmp-pip-active .paper-tooltip, html.jmp-pip-active .buttonTooltip, html.jmp-pip-active .button-tooltip { z-index: 2147483645 !important; }';
 
         // Hide scrollbars app-wide (scroll still works via wheel/trackpad/keys).
         if (jmpInfo.settings.advanced.hideScrollbar) {
@@ -898,21 +908,29 @@
         document.addEventListener('pointermove', revealPictureInPictureControls, true);
         document.addEventListener('focusin', revealPictureInPictureControls, true);
 
+        document.addEventListener('pointerdown', event => {
+            if (!window._isPictureInPicture || !pictureInPictureMenuRequested
+                || !(event.target instanceof Element)) return;
+            if (event.target.closest('[data-jmp-pip-menu="1"], .videoOsdBottom [data-jmp-pip-control]')) return;
+            closePictureInPictureSelectionMenus();
+        }, true);
+
         document.addEventListener('click', event => {
             if (!window._isPictureInPicture || !(event.target instanceof Element)) return;
             const control = event.target.closest('.videoOsdBottom [data-jmp-pip-control]');
             if (!control) return;
             const kind = control.dataset.jmpPipControl;
-            if (closePictureInPictureSelectionMenus() && (kind === 'audio' || kind === 'subtitles')) {
+            const selectionControl = kind === 'audio' || kind === 'subtitles';
+            if (selectionControl && pictureInPictureMenuRequested) {
+                closePictureInPictureSelectionMenus();
                 event.preventDefault();
                 event.stopImmediatePropagation();
                 return;
             }
-            if (kind !== 'audio' && kind !== 'subtitles') return;
-            const selectionControl = event.target.closest(
-                '[data-jmp-pip-control="audio"], [data-jmp-pip-control="subtitles"]'
-            );
-            if (!selectionControl) return;
+            if (!selectionControl) {
+                closePictureInPictureSelectionMenus();
+                return;
+            }
             pictureInPictureMenuRequested = true;
             pictureInPictureMenuOpened = false;
             document.documentElement.classList.add('jmp-pip-menu-requested');

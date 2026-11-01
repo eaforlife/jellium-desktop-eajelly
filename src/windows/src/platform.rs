@@ -19,12 +19,12 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::WindowsAndMessaging::{
     CWPRETSTRUCT, CallNextHookEx, GWL_STYLE, GetWindowLongPtrW, GetWindowThreadProcessId, HHOOK,
-    HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed, PostMessageW, SC_MOVE, SIZE_MINIMIZED,
-    SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+    HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed, MINMAXINFO, PostMessageW, SC_MOVE,
+    SIZE_MINIMIZED, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW,
     SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROCRET, WM_CLOSE, WM_DPICHANGED,
-    WM_MOVE, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-    WS_SYSMENU, WS_THICKFRAME,
+    WM_GETMINMAXINFO, WM_MOVE, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WS_CAPTION, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use jfn_mpv::api::{
@@ -34,7 +34,9 @@ use jfn_mpv::api::{
 use jfn_mpv::boot::jfn_mpv_handle_get;
 use jfn_platform_abi::PhysicalSize;
 use jfn_platform_abi::geometry::{Bounds, WindowGeometry, clamp_to_bounds};
-use jfn_platform_abi::picture_in_picture::{DEFAULT_SCREEN_FRACTION, fit_display_fraction};
+use jfn_platform_abi::picture_in_picture::{
+    DEFAULT_SCREEN_FRACTION, MINIMUM_SCREEN_FRACTION, fit_display_fraction,
+};
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 
 use crate::input::{
@@ -49,6 +51,7 @@ struct WinState {
     wndproc_hook_raw: usize,
     input_thread: Option<JoinHandle<()>>,
     picture_in_picture_restore: Option<(RECT, isize)>,
+    picture_in_picture_minimum: Option<PhysicalSize>,
 }
 
 impl WinState {
@@ -60,6 +63,7 @@ impl WinState {
             wndproc_hook_raw: 0,
             input_thread: None,
             picture_in_picture_restore: None,
+            picture_in_picture_minimum: None,
         }
     }
 }
@@ -219,6 +223,7 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
             h: info.rcWork.bottom - info.rcWork.top,
         };
         let size = fit_display_fraction(display, aspect_ratio, DEFAULT_SCREEN_FRACTION);
+        let minimum_size = fit_display_fraction(display, aspect_ratio, MINIMUM_SCREEN_FRACTION);
         let x = info.rcWork.right - size.w;
         let y = info.rcWork.bottom - size.h;
         let original_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
@@ -228,6 +233,7 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
                 return;
             }
             state.picture_in_picture_restore = Some((restore, original_style));
+            state.picture_in_picture_minimum = Some(minimum_size);
         }
         let pip_style = (original_style as u32
             & !(WS_CAPTION.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0))
@@ -258,7 +264,9 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
                     SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
                 )
             };
-            STATE.lock().picture_in_picture_restore = None;
+            let mut state = STATE.lock();
+            state.picture_in_picture_restore = None;
+            state.picture_in_picture_minimum = None;
             return;
         }
         jfn_platform_abi::picture_in_picture::notify(true);
@@ -281,7 +289,10 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
         }
         .is_ok()
         {
-            STATE.lock().picture_in_picture_restore = None;
+            let mut state = STATE.lock();
+            state.picture_in_picture_restore = None;
+            state.picture_in_picture_minimum = None;
+            drop(state);
             jfn_platform_abi::picture_in_picture::notify(false);
         } else {
             let current_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
@@ -298,6 +309,15 @@ unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM
         let msg = unsafe { &*(lp.0 as *const CWPRETSTRUCT) };
         let target_hwnd_raw = STATE.lock().mpv_hwnd_raw;
         if (msg.hwnd.0 as usize) == target_hwnd_raw {
+            let minimum = STATE.lock().picture_in_picture_minimum;
+            if msg.message == WM_GETMINMAXINFO
+                && let Some(minimum) = minimum
+                && msg.lParam.0 != 0
+            {
+                let minmax = unsafe { &mut *(msg.lParam.0 as *mut MINMAXINFO) };
+                minmax.ptMinTrackSize.x = minmax.ptMinTrackSize.x.max(minimum.w);
+                minmax.ptMinTrackSize.y = minmax.ptMinTrackSize.y.max(minimum.h);
+            }
             match msg.message {
                 WM_SIZE if msg.wParam.0 == SIZE_MINIMIZED as usize => {
                     if !std::mem::replace(&mut STATE.lock().was_minimized, true) {
