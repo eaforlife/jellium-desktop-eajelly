@@ -132,13 +132,11 @@ must be in the CEF injection allowlist, routed by `business_web`, and
 implemented by the platform backend. Keep playback-finished/canceled/error
 events clearing the browser PiP state, and test both entering and exiting PiP
 after a video ends.
-PiP uses a frameless, topmost, movable, resizable native window with a close
-button and a minimum size that keeps controls in frame. Reuse Jellyfin's live
-`.videoOsdBottom` controls; show only Play/Pause, Mute/Volume, and skip
-back/forward. Preserve Jellyfin's layout, colors, and theme; limit CSS changes
-to visibility and proportional sizing. Keep Jellyfin's OSD auto-hide and
-first-click reveal behavior. Scale subtitles up for the PiP viewport, then
-restore the original MPV subtitle options when PiP closes.
+PiP is frameless, topmost, movable, and resizable with a minimum control-safe
+size. Reuse Jellyfin's `.videoOsdBottom`; show only Play/Pause, Mute/Volume,
+and skip back/forward without changing server styles. Follow Jellyfin's OSD
+fade and first-click reveal. Scale subtitles to the PiP viewport and restore
+MPV options on exit. Reassert topmost order when foreground apps change.
 
 For the `windows` crate APIs, check the generated return type before writing
 error handling: APIs such as `SetWindowPos` return `Result<(), Error>` and

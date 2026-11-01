@@ -458,8 +458,8 @@
                 element.getAttribute('aria-label'), element.textContent])
             .map(value => String(value || '').toLowerCase())
             .join(' ');
-        if (/btnskipback|skip.?back/.test(identity)) return 'seek-back';
-        if (/btnskipforward|skip.?forward/.test(identity)) return 'seek-forward';
+        if (/btnskipback|btnrewind|fast_rewind|replay_?10|skip.?back|seek.?back/.test(identity)) return 'seek-back';
+        if (/btnskipforward|btnfastforward|fast_forward|forward_?10|skip.?forward|seek.?forward/.test(identity)) return 'seek-forward';
         if (/btnpause|btnplay|play_pause|play pause|\bpause\b|\bplay\b|play_arrow/.test(identity)) return 'play-pause';
         if (/btnmute|volume_(off|up|down|mute)|\bmute\b/.test(identity)) return 'volume';
         return null;
@@ -524,7 +524,14 @@
             pictureInPictureButton.setAttribute('aria-label', pictureInPictureButton.title);
         }
         if (pictureInPictureCloseHost) {
-            pictureInPictureCloseHost.dataset.visible = window._isPictureInPicture ? '1' : '0';
+            pictureInPictureCloseHost.dataset.visible =
+                window._isPictureInPicture && videoOsdVisible ? '1' : '0';
+            const osd = document.querySelector('.videoOsdBottom');
+            if (osd) {
+                const osdStyle = getComputedStyle(osd);
+                pictureInPictureCloseHost.style.transitionDuration = osdStyle.transitionDuration;
+                pictureInPictureCloseHost.style.transitionTimingFunction = osdStyle.transitionTimingFunction;
+            }
         }
     }
 
@@ -579,8 +586,9 @@
         const style = document.createElement('style');
         style.textContent = `
             :host { position: fixed; inset: 0; z-index: 2147483647;
-                    display: none; pointer-events: none; }
-            :host([data-visible="1"]) { display: block; }
+                    opacity: 0; visibility: hidden; pointer-events: none;
+                    transition-property: opacity, visibility; }
+            :host([data-visible="1"]) { opacity: 1; visibility: visible; }
             .drag { position: absolute; z-index: 0; top: 0; left: 0;
                     right: calc(4vmin + clamp(22px, 10vmin, 38px));
                     height: calc(4vmin + clamp(22px, 10vmin, 38px));
@@ -767,7 +775,7 @@
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { width: 7.5cqw !important; height: 6.5cqw !important; min-width: 7.5cqw !important; min-height: 6.5cqw !important; margin: 0 0.2cqw !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light :is(.material-icons, .material-symbols-rounded, .material-symbols-outlined) { font-size: 3.2cqw !important; line-height: 1 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; max-width: 0 !important; margin: 0 !important; padding: 0 !important; opacity: 0 !important; visibility: hidden !important; overflow: hidden !important; pointer-events: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .osdVolumeSliderContainer[data-jmp-pip-volume] { flex-basis: 10cqw !important; width: 10cqw !important; min-width: 10cqw !important; max-width: 10cqw !important; margin: 0 0.5cqw !important; opacity: 1 !important; visibility: visible !important; overflow: visible !important; pointer-events: auto !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .osdVolumeSliderContainer[data-jmp-pip-volume] { flex-basis: 15cqw !important; width: 15cqw !important; min-width: 15cqw !important; max-width: 15cqw !important; margin: 0 0.5cqw !important; opacity: 1 !important; visibility: visible !important; overflow: visible !important; pointer-events: auto !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .sliderBubble { display: none !important; visibility: hidden !important; opacity: 0 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons:has(.volumeButtons:hover, .osdVolumeSliderContainer:hover, .osdVolumeSliderContainer:focus-within) .sliderBubble { display: block !important; visibility: visible !important; opacity: 1 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .osdVolumeSliderContainer[data-jmp-pip-volume] .mdl-slider-container, html.jmp-pip-active .videoOsdBottom .osdVolumeSliderContainer[data-jmp-pip-volume] input[type="range"] { width: 100% !important; opacity: 1 !important; visibility: visible !important; }';
@@ -844,6 +852,15 @@
                     }
                 }
             }
+        }, true);
+
+        document.addEventListener('click', event => {
+            if (!window._isPictureInPicture || !(event.target instanceof Element)) return;
+            if (event.target.closest('jmp-pip-close, .videoOsdBottom [data-jmp-pip-control], [data-jmp-picture-in-picture-control="1"]')) return;
+            const player = window._mpvVideoPlayerInstance;
+            if (!player) return;
+            if (player.paused?.()) player.resume?.();
+            else player.pause?.();
         }, true);
 
         // The PiP close overlay follows the same visibility signal as the

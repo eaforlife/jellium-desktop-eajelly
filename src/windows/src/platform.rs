@@ -16,15 +16,17 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CWPRETSTRUCT, CallNextHookEx, GWL_STYLE, GetWindowLongPtrW, GetWindowThreadProcessId, HHOOK,
-    HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed, MINMAXINFO, PostMessageW, SC_MOVE,
-    SIZE_MINIMIZED, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW,
-    SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROCRET, WM_CLOSE, WM_DPICHANGED,
-    WM_GETMINMAXINFO, WM_MOVE, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WS_CAPTION, WS_MAXIMIZEBOX,
-    WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    CWPRETSTRUCT, CallNextHookEx, EVENT_SYSTEM_FOREGROUND, GWL_STYLE, GetWindowLongPtrW,
+    GetWindowThreadProcessId, HHOOK, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed, MINMAXINFO,
+    PostMessageW, SC_MOVE, SIZE_MINIMIZED, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowLongPtrW,
+    SetWindowPos, SetWindowsHookExW, SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROCRET,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_CLOSE, WM_DPICHANGED, WM_GETMINMAXINFO,
+    WM_MOVE, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    WS_SYSMENU, WS_THICKFRAME,
 };
 
 use jfn_mpv::api::{
@@ -53,6 +55,7 @@ struct WinState {
     picture_in_picture_restore: Option<(RECT, isize)>,
     picture_in_picture_minimum: Option<PhysicalSize>,
     picture_in_picture_subtitles: Option<(f64, bool, bool)>,
+    picture_in_picture_foreground_hook: Option<usize>,
 }
 
 impl WinState {
@@ -66,11 +69,50 @@ impl WinState {
             picture_in_picture_restore: None,
             picture_in_picture_minimum: None,
             picture_in_picture_subtitles: None,
+            picture_in_picture_foreground_hook: None,
         }
     }
 }
 
 static STATE: Mutex<WinState> = Mutex::new(WinState::new());
+
+unsafe extern "system" fn win_pip_foreground_changed(
+    _hook: HWINEVENTHOOK,
+    event: u32,
+    foreground: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if event != EVENT_SYSTEM_FOREGROUND {
+        return;
+    }
+    let pip = {
+        let state = STATE.lock();
+        state
+            .picture_in_picture_restore
+            .map(|_| state.mpv_hwnd_raw)
+            .filter(|raw| *raw != 0)
+    };
+    let Some(pip) = pip.map(hwnd_from_raw) else {
+        return;
+    };
+    if pip.0 == foreground.0 {
+        return;
+    }
+    let _ = unsafe {
+        SetWindowPos(
+            pip,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+    };
+}
 
 fn win_read_pip_subtitle_settings() -> Option<(f64, bool, bool)> {
     let mut scale = 0.0;
@@ -301,10 +343,24 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
         if let Some(settings) = subtitle_settings {
             // Compensate for mpv's window-relative font shrink at the initial
             // PiP size; keep window-relative scaling enabled for user resizing.
-            let subtitle_scale = (settings.0 * (display.h as f64 / size.h as f64)).min(100.0);
+            let subtitle_scale = (settings.0 * (display.h as f64 / size.h as f64) * 0.8).min(100.0);
             win_set_pip_subtitle_settings(subtitle_scale, true, true);
         }
         jfn_platform_abi::picture_in_picture::notify(true);
+        let hook = unsafe {
+            SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_FOREGROUND,
+                None,
+                Some(win_pip_foreground_changed),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            )
+        };
+        if !hook.is_invalid() {
+            STATE.lock().picture_in_picture_foreground_hook = Some(hook.0 as usize);
+        }
     } else {
         let restore = STATE.lock().picture_in_picture_restore;
         let Some((restore, original_style)) = restore else {
@@ -326,9 +382,16 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
         {
             let mut state = STATE.lock();
             let subtitle_settings = state.picture_in_picture_subtitles.take();
+            let foreground_hook = state
+                .picture_in_picture_foreground_hook
+                .take()
+                .map(|raw| HWINEVENTHOOK(raw as *mut c_void));
             state.picture_in_picture_restore = None;
             state.picture_in_picture_minimum = None;
             drop(state);
+            if let Some(hook) = foreground_hook {
+                let _ = unsafe { UnhookWinEvent(hook) };
+            }
             if let Some(settings) = subtitle_settings {
                 win_set_pip_subtitle_settings(settings.0, settings.1, settings.2);
             }
@@ -433,6 +496,14 @@ pub(crate) fn win_init(_mpv: *mut c_void) -> Result<(), jfn_platform_abi::Platfo
 }
 
 pub(crate) fn win_cleanup() {
+    let foreground_hook = STATE
+        .lock()
+        .picture_in_picture_foreground_hook
+        .take()
+        .map(|raw| HWINEVENTHOOK(raw as *mut c_void));
+    if let Some(hook) = foreground_hook {
+        let _ = unsafe { UnhookWinEvent(hook) };
+    }
     jfn_input_windows_stop_input_thread();
     let join = STATE.lock().input_thread.take();
     if let Some(j) = join {
