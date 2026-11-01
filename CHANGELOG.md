@@ -4,7 +4,7 @@
 
 - Updated upstream dependencies and platform APIs.
 - Added resizable Windows PiP with Jellyfin controls, MPV subtitles, and topmost recovery.
-- Set a control-safe minimum PiP window size based on the display dimensions.
+- Set a control-safe minimum PiP window size based on the display dimensions, with extra width for volume controls.
 
 ## 3.2.0
 
