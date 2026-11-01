@@ -528,6 +528,43 @@
         }
     }
 
+    function closePictureInPictureSelectionMenus() {
+        const selectors = '[role="dialog"], [role="menu"], [role="listbox"], ' +
+            '.dialogContainer, .selectMenu, .selectMenuPage, .selectMenuContent, ' +
+            '.selectMenuContainer, .selectDialog, #selectMenuPage, .actionSheet';
+        const menus = [...document.querySelectorAll(selectors)].filter(menu => {
+            if (menu.closest('.videoOsdBottom')) return false;
+            const style = getComputedStyle(menu);
+            const bounds = menu.getBoundingClientRect();
+            return !menu.hidden && menu.getAttribute('aria-hidden') !== 'true'
+                && style.display !== 'none' && Number(style.opacity) > 0
+                && bounds.width > 0 && bounds.height > 0;
+        });
+        if (menus.length === 0) return false;
+
+        for (const menu of menus.filter(candidate => !candidate.parentElement?.closest(selectors))) {
+            if (menu instanceof HTMLDialogElement && menu.open) {
+                menu.close();
+                continue;
+            }
+            const closeButton = menu.querySelector(
+                '.btnClose, .btnCancel, .closeButton, button[aria-label="Close"], button[title="Close"]'
+            );
+            if (closeButton instanceof HTMLElement) closeButton.click();
+        }
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Escape',
+            code: 'Escape',
+            bubbles: true,
+            cancelable: true
+        }));
+        document.documentElement.classList.remove('jmp-pip-menu-requested');
+        pictureInPictureMenuRequested = false;
+        pictureInPictureMenuOpened = false;
+        requestAnimationFrame(markPictureInPictureSelectionMenus);
+        return true;
+    }
+
     function markPictureInPictureControls(root) {
         if (!(root instanceof Element) && root !== document) return;
         const candidates = [];
@@ -789,18 +826,22 @@
         css += '\n@keyframes mpv-video-zoomin { from { transform: scale3d(0.2, 0.2, 0.2); opacity: 0.6; } to { transform: none; opacity: initial; } }';
         css += '\nhtml.jmp-pip-active [data-jmp-picture-in-picture-control="1"] { display: none !important; }';
         css += '\nhtml.jmp-pip-active body { visibility: hidden !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom { display: block !important; position: fixed !important; left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important; width: 100% !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 4px 8px !important; transform: none !important; opacity: 1 !important; visibility: visible !important; z-index: 2147483644 !important; background: rgba(0,0,0,.72) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom { display: block !important; position: fixed !important; left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important; width: 100% !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 12px 10px 10px !important; box-sizing: border-box !important; transform: none !important; opacity: 1 !important; visibility: visible !important; z-index: 2147483644 !important; background: linear-gradient(transparent, rgba(0,0,0,.72) 30%, rgba(0,0,0,.88)) !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom.videoOsdBottom-hidden { opacity: 1 !important; transform: none !important; visibility: visible !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom * { visibility: hidden !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .osdControls > .flex, html.jmp-pip-active .videoOsdBottom .osdTextContainer, html.jmp-pip-active .videoOsdBottom .osdPositionText, html.jmp-pip-active .videoOsdBottom .osdDurationText, html.jmp-pip-active .videoOsdBottom .endsAtText, html.jmp-pip-active .videoOsdBottom .sliderContainer:not(.osdVolumeSliderContainer .sliderContainer) { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons { display: flex !important; visibility: visible !important; align-items: center !important; justify-content: center !important; gap: 2vmin !important; padding: 0 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .osdControls > .flex, html.jmp-pip-active .videoOsdBottom .osdTextContainer, html.jmp-pip-active .videoOsdBottom .osdPositionText, html.jmp-pip-active .videoOsdBottom .osdDurationText, html.jmp-pip-active .videoOsdBottom .endsAtText, html.jmp-pip-active .videoOsdBottom .osdMainTextContainer { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons { display: flex !important; visibility: visible !important; align-items: center !important; justify-content: center !important; gap: clamp(2px, 1vw, 10px) !important; width: max-content !important; max-width: 100% !important; margin: 0 auto !important; padding: 4px 10px !important; border: 1px solid rgba(255,255,255,.14) !important; border-radius: 999px !important; background: rgba(18,20,24,.72) !important; box-shadow: 0 4px 18px rgba(0,0,0,.34) !important; backdrop-filter: blur(12px) !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons > *:not([data-jmp-pip-control-group="1"]) { display: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons button:not([data-jmp-pip-control]) { display: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons, html.jmp-pip-active .videoOsdBottom .buttons * { visibility: hidden !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control-group="1"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control] *, html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume] * { display: flex !important; visibility: visible !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control] { width: clamp(28px, 9vmin, 44px) !important; height: clamp(28px, 9vmin, 44px) !important; min-width: clamp(28px, 9vmin, 44px) !important; min-height: clamp(28px, 9vmin, 44px) !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="play-pause"] { width: clamp(34px, 11vmin, 52px) !important; height: clamp(34px, 11vmin, 52px) !important; min-width: clamp(34px, 11vmin, 52px) !important; min-height: clamp(34px, 11vmin, 52px) !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { width: clamp(56px, 18vmin, 88px) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex: 0 0 auto !important; width: clamp(28px, 7vmin, 42px) !important; height: clamp(28px, 7vmin, 42px) !important; min-width: clamp(28px, 7vmin, 42px) !important; min-height: clamp(28px, 7vmin, 42px) !important; margin: 0 !important; padding: 0 !important; border: 0 !important; border-radius: 50% !important; background: transparent !important; color: rgba(255,255,255,.94) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light:hover { background: rgba(255,255,255,.14) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light .material-icons { font-size: clamp(18px, 4.2vmin, 24px) !important; line-height: 1 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .btnPause.paper-icon-button-light { width: clamp(32px, 8vmin, 48px) !important; height: clamp(32px, 8vmin, 48px) !important; min-width: clamp(32px, 8vmin, 48px) !important; min-height: clamp(32px, 8vmin, 48px) !important; background: rgba(255,255,255,.16) !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .volumeButtons[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 auto !important; gap: 2px !important; margin: 0 !important; padding: 0 !important; background: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 1 clamp(56px, 12vw, 112px) !important; width: clamp(56px, 12vw, 112px) !important; min-width: 48px !important; max-width: 112px !important; margin: 0 4px !important; opacity: 1 !important; visibility: visible !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] .mdl-slider-container, html.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] input[type="range"] { display: block !important; width: 100% !important; opacity: 1 !important; visibility: visible !important; }';
         css += '\nhtml.jmp-pip-active [data-jmp-pip-menu="1"], html.jmp-pip-active [data-jmp-pip-menu="1"] * { visibility: visible !important; }';
 
         // Hide scrollbars app-wide (scroll still works via wheel/trackpad/keys).
@@ -852,10 +893,19 @@
 
         document.addEventListener('click', event => {
             if (!window._isPictureInPicture || !(event.target instanceof Element)) return;
-            const control = event.target.closest(
+            const control = event.target.closest('.videoOsdBottom [data-jmp-pip-control]');
+            if (!control) return;
+            const kind = control.dataset.jmpPipControl;
+            if (closePictureInPictureSelectionMenus() && (kind === 'audio' || kind === 'subtitles')) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                return;
+            }
+            if (kind !== 'audio' && kind !== 'subtitles') return;
+            const selectionControl = event.target.closest(
                 '[data-jmp-pip-control="audio"], [data-jmp-pip-control="subtitles"]'
             );
-            if (!control) return;
+            if (!selectionControl) return;
             pictureInPictureMenuRequested = true;
             pictureInPictureMenuOpened = false;
             document.documentElement.classList.add('jmp-pip-menu-requested');

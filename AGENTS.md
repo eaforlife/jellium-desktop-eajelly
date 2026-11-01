@@ -132,6 +132,14 @@ must be in the CEF injection allowlist, routed by `business_web`, and
 implemented by the platform backend. Keep playback-finished/canceled/error
 events clearing the browser PiP state, and test both entering and exiting PiP
 after a video ends.
+In PiP, reuse Jellyfin's live `.videoOsdBottom` controls and restyle that DOM;
+do not replace playback, audio, subtitle, or volume actions with app-owned
+lookalikes. Keep only the compact transport/audio/subtitle/volume controls,
+hide the PiP toggle, and keep the player surface clickable for play/pause.
+Keep Jellyfin's volume slider visible even when its normal hover behavior is
+disabled. Audio/subtitle selection menus must remain visible in PiP, close when
+another player control is used, and toggle closed when their own button is
+clicked again instead of opening duplicate dialogs.
 
 For the `windows` crate APIs, check the generated return type before writing
 error handling: APIs such as `SetWindowPos` return `Result<(), Error>` and
