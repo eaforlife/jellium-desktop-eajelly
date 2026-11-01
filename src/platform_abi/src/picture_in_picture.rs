@@ -9,6 +9,8 @@ use crate::PhysicalSize;
 
 pub const DEFAULT_SCREEN_FRACTION: f64 = 0.35 * 1.15;
 pub const MINIMUM_SCREEN_FRACTION: f64 = 0.15;
+pub const MINIMUM_WIDTH_SCREEN_FRACTION: f64 = 0.36;
+pub const MINIMUM_HEIGHT_SCREEN_FRACTION: f64 = 0.31;
 pub const MAXIMUM_SCREEN_FRACTION: f64 = 0.50;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -55,6 +57,19 @@ pub fn fit_display_fraction(display: PhysicalSize, aspect: f64, fraction: f64) -
     PhysicalSize {
         w: w.round().max(1.0) as i32,
         h: h.round().max(1.0) as i32,
+    }
+}
+
+/// Minimum PiP footprint that keeps the full playback control row usable.
+#[must_use]
+pub fn minimum_control_size(display: PhysicalSize) -> PhysicalSize {
+    PhysicalSize {
+        w: (f64::from(display.w.max(1)) * MINIMUM_WIDTH_SCREEN_FRACTION)
+            .round()
+            .max(1.0) as i32,
+        h: (f64::from(display.h.max(1)) * MINIMUM_HEIGHT_SCREEN_FRACTION)
+            .round()
+            .max(1.0) as i32,
     }
 }
 

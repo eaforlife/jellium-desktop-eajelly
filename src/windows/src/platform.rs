@@ -19,14 +19,14 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CWPRETSTRUCT, CallNextHookEx, EVENT_SYSTEM_FOREGROUND, GWL_STYLE, GetWindowLongPtrW,
+    CWPRETSTRUCT, CWPSTRUCT, CallNextHookEx, EVENT_SYSTEM_FOREGROUND, GWL_STYLE, GetWindowLongPtrW,
     GetWindowThreadProcessId, HHOOK, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed, MINMAXINFO,
     PostMessageW, SC_MOVE, SIZE_MINIMIZED, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowLongPtrW,
-    SetWindowPos, SetWindowsHookExW, SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROCRET,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_CLOSE, WM_DPICHANGED, WM_GETMINMAXINFO,
-    WM_MOVE, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-    WS_SYSMENU, WS_THICKFRAME,
+    SetWindowPos, SetWindowsHookExW, SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROC,
+    WH_CALLWNDPROCRET, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_CLOSE, WM_DPICHANGED,
+    WM_GETMINMAXINFO, WM_MOVE, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WS_CAPTION, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use jfn_mpv::api::{
@@ -37,7 +37,7 @@ use jfn_mpv::boot::jfn_mpv_handle_get;
 use jfn_platform_abi::PhysicalSize;
 use jfn_platform_abi::geometry::{Bounds, WindowGeometry, clamp_to_bounds};
 use jfn_platform_abi::picture_in_picture::{
-    DEFAULT_SCREEN_FRACTION, MINIMUM_SCREEN_FRACTION, fit_display_fraction,
+    DEFAULT_SCREEN_FRACTION, fit_display_fraction, minimum_control_size,
 };
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 
@@ -51,6 +51,7 @@ struct WinState {
     was_minimized: bool,
     restore_maximized_on_unfullscreen: bool,
     wndproc_hook_raw: usize,
+    minmax_hook_raw: usize,
     input_thread: Option<JoinHandle<()>>,
     picture_in_picture_restore: Option<(RECT, isize)>,
     picture_in_picture_minimum: Option<PhysicalSize>,
@@ -65,6 +66,7 @@ impl WinState {
             was_minimized: false,
             restore_maximized_on_unfullscreen: false,
             wndproc_hook_raw: 0,
+            minmax_hook_raw: 0,
             input_thread: None,
             picture_in_picture_restore: None,
             picture_in_picture_minimum: None,
@@ -291,7 +293,7 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
             h: info.rcWork.bottom - info.rcWork.top,
         };
         let size = fit_display_fraction(display, aspect_ratio, DEFAULT_SCREEN_FRACTION);
-        let minimum_size = fit_display_fraction(display, aspect_ratio, MINIMUM_SCREEN_FRACTION);
+        let minimum_size = minimum_control_size(display);
         let subtitle_settings = win_read_pip_subtitle_settings();
         let x = info.rcWork.right - size.w;
         let y = info.rcWork.bottom - size.h;
@@ -407,20 +409,30 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
     }
 }
 
+unsafe extern "system" fn mpv_minmax_hook(n_code: c_int, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if n_code >= 0 {
+        let msg = unsafe { &*(lp.0 as *const CWPSTRUCT) };
+        let target_hwnd_raw = STATE.lock().mpv_hwnd_raw;
+        if msg.hwnd.0 as usize == target_hwnd_raw
+            && msg.message == WM_GETMINMAXINFO
+            && msg.lParam.0 != 0
+            && let Some(minimum) = STATE.lock().picture_in_picture_minimum
+        {
+            let minmax = unsafe { &mut *(msg.lParam.0 as *mut MINMAXINFO) };
+            minmax.ptMinTrackSize.x = minmax.ptMinTrackSize.x.max(minimum.w);
+            minmax.ptMinTrackSize.y = minmax.ptMinTrackSize.y.max(minimum.h);
+        }
+    }
+    let hook_raw = STATE.lock().minmax_hook_raw;
+    let hook = HHOOK(hook_raw as *mut c_void);
+    unsafe { CallNextHookEx(Some(hook), n_code, wp, lp) }
+}
+
 unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if n_code >= 0 {
         let msg = unsafe { &*(lp.0 as *const CWPRETSTRUCT) };
         let target_hwnd_raw = STATE.lock().mpv_hwnd_raw;
         if (msg.hwnd.0 as usize) == target_hwnd_raw {
-            let minimum = STATE.lock().picture_in_picture_minimum;
-            if msg.message == WM_GETMINMAXINFO
-                && let Some(minimum) = minimum
-                && msg.lParam.0 != 0
-            {
-                let minmax = unsafe { &mut *(msg.lParam.0 as *mut MINMAXINFO) };
-                minmax.ptMinTrackSize.x = minmax.ptMinTrackSize.x.max(minimum.w);
-                minmax.ptMinTrackSize.y = minmax.ptMinTrackSize.y.max(minimum.h);
-            }
             match msg.message {
                 WM_SIZE if msg.wParam.0 == SIZE_MINIMIZED as usize => {
                     if !std::mem::replace(&mut STATE.lock().was_minimized, true) {
@@ -479,6 +491,24 @@ pub(crate) fn win_init(_mpv: *mut c_void) -> Result<(), jfn_platform_abi::Platfo
             ));
         }
     }
+    let minmax_hook =
+        unsafe { SetWindowsHookExW(WH_CALLWNDPROC, Some(mpv_minmax_hook), None, mpv_tid) };
+    match minmax_hook {
+        Ok(h) => STATE.lock().minmax_hook_raw = h.0 as usize,
+        Err(e) => {
+            let hook_raw = STATE.lock().wndproc_hook_raw;
+            if hook_raw != 0 {
+                unsafe {
+                    let _ = UnhookWindowsHookEx(HHOOK(hook_raw as *mut c_void));
+                }
+                STATE.lock().wndproc_hook_raw = 0;
+            }
+            return Err(jfn_platform_abi::PlatformInitError::backend(
+                "SetWindowsHookExW(WH_CALLWNDPROC)",
+                e,
+            ));
+        }
+    }
 
     let mpv_hwnd_for_thread = hwnd_raw;
     let join = std::thread::Builder::new()
@@ -517,6 +547,14 @@ pub(crate) fn win_cleanup() {
             let _ = UnhookWindowsHookEx(hook);
         }
         STATE.lock().wndproc_hook_raw = 0;
+    }
+    let minmax_hook_raw = STATE.lock().minmax_hook_raw;
+    if minmax_hook_raw != 0 {
+        let hook = HHOOK(minmax_hook_raw as *mut c_void);
+        unsafe {
+            let _ = UnhookWindowsHookEx(hook);
+        }
+        STATE.lock().minmax_hook_raw = 0;
     }
     crate::window::stop_notifier();
 
