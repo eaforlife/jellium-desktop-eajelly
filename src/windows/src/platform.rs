@@ -269,6 +269,7 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
             state.picture_in_picture_minimum = None;
             return;
         }
+        jfn_mpv::api::jfn_mpv_set_option_flag("sub-scale-with-window", false);
         jfn_platform_abi::picture_in_picture::notify(true);
     } else {
         let restore = STATE.lock().picture_in_picture_restore;
@@ -293,6 +294,7 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
             state.picture_in_picture_restore = None;
             state.picture_in_picture_minimum = None;
             drop(state);
+            jfn_mpv::api::jfn_mpv_set_option_flag("sub-scale-with-window", true);
             jfn_platform_abi::picture_in_picture::notify(false);
         } else {
             let current_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };

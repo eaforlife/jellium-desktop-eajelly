@@ -460,8 +460,10 @@
                 element.getAttribute('aria-label'), element.textContent])
             .map(value => String(value || '').toLowerCase())
             .join(' ');
-        if (/btnrewind|fast_rewind|replay_?10|seek.?back|skip.?back/.test(identity)) return 'seek-back';
-        if (/btnfastforward|fast_forward|forward_?10|seek.?forward|skip.?forward/.test(identity)) return 'seek-forward';
+        if (/btnrewind|fast_rewind|replay_?10/.test(identity)) return 'curved-seek-back';
+        if (/btnfastforward|fast_forward|forward_?10/.test(identity)) return 'curved-seek-forward';
+        if (/btnskipback|seek.?back|skip.?back/.test(identity)) return 'seek-back';
+        if (/btnskipforward|seek.?forward|skip.?forward/.test(identity)) return 'seek-forward';
         if (/btnprevious|previoustrack|skip_previous|previous track/.test(identity)) return 'previous';
         if (/btnnext|nexttrack|skip_next|next track/.test(identity)) return 'next';
         if (/btnpause|btnplay|play_pause|play pause|\bpause\b|\bplay\b|play_arrow/.test(identity)) return 'play-pause';
@@ -840,9 +842,9 @@
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(.btnRewind, .btnSkipBack, .btnPause, .btnPlay) { display: none !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons, html.jmp-pip-active .videoOsdBottom .buttons * { visibility: hidden !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control-group="1"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control] *, html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-volume] * { display: flex !important; visibility: visible !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="seek-back"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="play-pause"] { display: none !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex: 0 0 auto !important; width: 10cqw !important; height: 8.5cqw !important; min-width: 10cqw !important; min-height: 8.5cqw !important; margin: 0 0.3cqw !important; cursor: pointer !important; }';
-        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light :is(.material-icons, .material-symbols-rounded, .material-symbols-outlined) { font-size: 4.2cqw !important; line-height: 1 !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex: 0 0 auto !important; width: 8.5cqw !important; height: 7.2cqw !important; min-width: 8.5cqw !important; min-height: 7.2cqw !important; margin: 0 0.25cqw !important; cursor: pointer !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="previous"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="next"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="curved-seek-back"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="curved-seek-forward"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="audio"], html.jmp-pip-active .videoOsdBottom .buttons [data-jmp-pip-control="subtitles"] { display: none !important; }';
+        css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .paper-icon-button-light :is(.material-icons, .material-symbols-rounded, .material-symbols-outlined) { font-size: 3.6cqw !important; line-height: 1 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):hover, html.jmp-pip-active .videoOsdBottom .buttons :is(button, [role="button"], .paper-icon-button-light):focus { position: relative !important; z-index: 2147483645 !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .volumeButtons[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 auto !important; }';
         css += '\nhtml.jmp-pip-active .videoOsdBottom .buttons .osdVolumeSliderContainer[data-jmp-pip-volume] { display: flex !important; align-items: center !important; flex: 0 0 0 !important; width: 0 !important; min-width: 0 !important; max-width: 0 !important; margin: 0 !important; padding: 0 !important; opacity: 0 !important; visibility: hidden !important; overflow: hidden !important; pointer-events: none !important; }';
