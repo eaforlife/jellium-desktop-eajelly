@@ -319,6 +319,12 @@ fn handle_message(message: BrowserMessage) -> bool {
                 "window._nativePictureInPictureChanged({enabled})"
             ));
         }),
+        "windowStartMove" => {
+            if let Some(platform) = jfn_platform_abi::try_lease() {
+                platform.start_window_move();
+            }
+            true
+        }
         "installUpdate" => with_args(args, |a| {
             let url = list_string(a, 0);
             let digest = list_string(a, 1);

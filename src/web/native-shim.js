@@ -532,16 +532,18 @@
             :host { position: fixed; inset: 0; z-index: 2147483647;
                     display: none; pointer-events: none; }
             :host([data-visible="1"]) { display: block; }
-            button { all: unset; position: absolute; top: 12px; right: 12px;
-                     box-sizing: border-box; width: 38px; height: 38px;
+            .drag { position: absolute; inset: 0; pointer-events: auto; cursor: move; }
+            button { all: unset; position: absolute; z-index: 1; top: 2vmin; right: 2vmin;
+                     box-sizing: border-box; width: clamp(22px, 10vmin, 38px);
+                     height: clamp(22px, 10vmin, 38px);
                      border-radius: 50%; background: rgba(20, 20, 20, .72); color: white;
                      cursor: pointer; pointer-events: auto; box-shadow: 0 1px 5px rgba(0, 0, 0, .45); }
             button:hover, button:focus-visible { background: #c42b1c; }
-            button::before, button::after { content: ''; position: absolute; top: 18px; left: 10px;
-                                            width: 18px; height: 2px; border-radius: 1px;
+            button::before, button::after { content: ''; position: absolute; top: 50%; left: 50%;
+                                            width: 48%; height: 2px; border-radius: 1px;
                                             background: currentColor; }
-            button::before { transform: rotate(45deg); }
-            button::after { transform: rotate(-45deg); }`;
+            button::before { transform: translate(-50%, -50%) rotate(45deg); }
+            button::after { transform: translate(-50%, -50%) rotate(-45deg); }`;
         const button = document.createElement('button');
         button.type = 'button';
         button.title = 'Exit picture-in-picture';
@@ -557,7 +559,15 @@
                 window.jmpNative.setPictureInPicture(false, 1);
             }
         });
-        root.append(style, button);
+        const drag = document.createElement('div');
+        drag.className = 'drag';
+        drag.addEventListener('mousedown', event => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            window.jmpNative?.windowStartMove?.();
+        });
+        root.append(style, drag, button);
         pictureInPictureCloseHost = host;
         document.documentElement.appendChild(host);
         updatePictureInPictureUi();

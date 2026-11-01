@@ -541,6 +541,9 @@ pub trait Platform: Send + Sync {
 
     fn set_picture_in_picture(&self, _enabled: bool, _aspect_ratio: f64) {}
 
+    /// Begin moving a borderless native window in response to a pointer press.
+    fn start_window_move(&self) {}
+
     /// The controls an app-drawn titlebar drives, or `None` where the OS or
     /// the window manager draws the app window's titlebar.
     fn titlebar_controls(&self) -> Option<&dyn TitlebarControls>;

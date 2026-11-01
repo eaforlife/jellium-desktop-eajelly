@@ -19,10 +19,12 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::WindowsAndMessaging::{
     CWPRETSTRUCT, CallNextHookEx, GWL_STYLE, GetWindowLongPtrW, GetWindowThreadProcessId, HHOOK,
-    HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed, SIZE_MINIMIZED, SPI_GETWORKAREA, SWP_NOACTIVATE,
-    SWP_SHOWWINDOW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowPos, SetWindowsHookExW,
+    HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IsZoomed, PostMessageW, SC_MOVE, SIZE_MINIMIZED,
+    SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW,
     SystemParametersInfoW, UnhookWindowsHookEx, WH_CALLWNDPROCRET, WM_CLOSE, WM_DPICHANGED,
-    WM_MOVE, WM_SIZE, WM_STYLECHANGED, WS_CAPTION, WS_THICKFRAME,
+    WM_MOVE, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    WS_SYSMENU, WS_THICKFRAME,
 };
 
 use jfn_mpv::api::{
@@ -46,7 +48,7 @@ struct WinState {
     restore_maximized_on_unfullscreen: bool,
     wndproc_hook_raw: usize,
     input_thread: Option<JoinHandle<()>>,
-    picture_in_picture_restore: Option<RECT>,
+    picture_in_picture_restore: Option<(RECT, isize)>,
 }
 
 impl WinState {
@@ -176,6 +178,23 @@ pub(crate) fn win_toggle_fullscreen() {
     }
 }
 
+pub(crate) fn win_start_window_move() {
+    if !jfn_platform_abi::picture_in_picture::active() {
+        return;
+    }
+    let Some(hwnd) = win_hwnd() else {
+        return;
+    };
+    let _ = unsafe {
+        PostMessageW(
+            Some(hwnd),
+            WM_SYSCOMMAND,
+            WPARAM((SC_MOVE | HTCAPTION) as usize),
+            LPARAM(0),
+        )
+    };
+}
+
 pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
     let Some(hwnd) = win_hwnd() else {
         return;
@@ -202,13 +221,18 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
         let size = fit_display_fraction(display, aspect_ratio, DEFAULT_SCREEN_FRACTION);
         let x = info.rcWork.right - size.w;
         let y = info.rcWork.bottom - size.h;
+        let original_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
         {
             let mut state = STATE.lock();
             if state.picture_in_picture_restore.is_some() {
                 return;
             }
-            state.picture_in_picture_restore = Some(restore);
+            state.picture_in_picture_restore = Some((restore, original_style));
         }
+        let pip_style = (original_style as u32
+            & !(WS_CAPTION.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0))
+            | WS_THICKFRAME.0;
+        unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, pip_style as isize) };
         if !unsafe {
             SetWindowPos(
                 hwnd,
@@ -217,20 +241,33 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
                 y,
                 size.w,
                 size.h,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
             )
         }
         .is_ok()
         {
+            unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, original_style) };
+            let _ = unsafe {
+                SetWindowPos(
+                    hwnd,
+                    Some(HWND_NOTOPMOST),
+                    restore.left,
+                    restore.top,
+                    restore.right - restore.left,
+                    restore.bottom - restore.top,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
+                )
+            };
             STATE.lock().picture_in_picture_restore = None;
             return;
         }
         jfn_platform_abi::picture_in_picture::notify(true);
     } else {
         let restore = STATE.lock().picture_in_picture_restore;
-        let Some(restore) = restore else {
+        let Some((restore, original_style)) = restore else {
             return;
         };
+        unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, original_style) };
         if unsafe {
             SetWindowPos(
                 hwnd,
@@ -239,13 +276,19 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
                 restore.top,
                 restore.right - restore.left,
                 restore.bottom - restore.top,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
             )
         }
         .is_ok()
         {
             STATE.lock().picture_in_picture_restore = None;
             jfn_platform_abi::picture_in_picture::notify(false);
+        } else {
+            let current_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+            let pip_style = (current_style as u32
+                & !(WS_CAPTION.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0))
+                | WS_THICKFRAME.0;
+            unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, pip_style as isize) };
         }
     }
 }

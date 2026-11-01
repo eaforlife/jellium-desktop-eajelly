@@ -341,6 +341,10 @@ impl Platform for WindowsPlatform {
         crate::platform::win_set_picture_in_picture(enabled, aspect_ratio);
     }
 
+    fn start_window_move(&self) {
+        crate::platform::win_start_window_move();
+    }
+
     // mpv's own WndProc settles the size; nothing here gates a frame
     fn resize_gate(&self) -> Option<&dyn jfn_platform_abi::ResizeGate> {
         None

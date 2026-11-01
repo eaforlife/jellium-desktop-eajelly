@@ -50,6 +50,7 @@ pub(crate) enum NativeFunction {
     SetOsdVisible,
     ToggleFullscreen,
     SetPictureInPicture,
+    WindowStartMove,
     InstallUpdate,
 }
 
@@ -88,6 +89,7 @@ impl NativeFunction {
             "setOsdVisible" => Self::SetOsdVisible,
             "toggleFullscreen" => Self::ToggleFullscreen,
             "setPictureInPicture" => Self::SetPictureInPicture,
+            "windowStartMove" => Self::WindowStartMove,
             "installUpdate" => Self::InstallUpdate,
             _ => return None,
         })
@@ -127,6 +129,7 @@ impl NativeFunction {
             Self::SetOsdVisible => "setOsdVisible",
             Self::ToggleFullscreen => "toggleFullscreen",
             Self::SetPictureInPicture => "setPictureInPicture",
+            Self::WindowStartMove => "windowStartMove",
             Self::InstallUpdate => "installUpdate",
         }
     }
@@ -206,6 +209,7 @@ const WEB_FUNCTIONS: &[NativeFunction] = &[
     NativeFunction::SetOsdVisible,
     NativeFunction::ToggleFullscreen,
     NativeFunction::SetPictureInPicture,
+    NativeFunction::WindowStartMove,
     NativeFunction::InstallUpdate,
 ];
 
