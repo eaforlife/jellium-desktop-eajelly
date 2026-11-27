@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 3.2.7-eajelly
 
-- Reduced the minimum Windows PiP width to 10% of the usable display width.
+- Integrated upstream platform, rendering, and playback updates.
+- Adjusted PiP window sizing to a 240 x 240 px minimum.
 
 ## 3.2.6-eajelly
 

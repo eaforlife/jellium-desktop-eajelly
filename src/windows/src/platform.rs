@@ -299,7 +299,7 @@ pub(crate) fn win_set_picture_in_picture(enabled: bool, aspect_ratio: f64) {
             h: info.rcWork.bottom - info.rcWork.top,
         };
         let size = fit_display_fraction(display, aspect_ratio, DEFAULT_SCREEN_FRACTION);
-        let minimum_size = minimum_control_size(display);
+        let minimum_size = minimum_control_size();
         let subtitle_settings = win_read_pip_subtitle_settings();
         let x = info.rcWork.right - size.w;
         let y = info.rcWork.bottom - size.h;

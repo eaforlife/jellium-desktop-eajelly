@@ -9,8 +9,8 @@ use crate::PhysicalSize;
 
 pub const DEFAULT_SCREEN_FRACTION: f64 = 0.35 * 1.15;
 pub const MINIMUM_SCREEN_FRACTION: f64 = 0.15;
-pub const MINIMUM_WIDTH_SCREEN_FRACTION: f64 = 0.10;
-pub const MINIMUM_HEIGHT_SCREEN_FRACTION: f64 = 0.31;
+pub const MINIMUM_CONTROL_WIDTH: i32 = 240;
+pub const MINIMUM_CONTROL_HEIGHT: i32 = 240;
 pub const MAXIMUM_SCREEN_FRACTION: f64 = 0.50;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -62,20 +62,21 @@ pub fn fit_display_fraction(display: PhysicalSize, aspect: f64, fraction: f64) -
 
 /// Minimum PiP footprint that keeps the full playback control row usable.
 #[must_use]
-pub fn minimum_control_size(display: PhysicalSize) -> PhysicalSize {
+pub fn minimum_control_size() -> PhysicalSize {
     PhysicalSize {
-        w: (f64::from(display.w.max(1)) * MINIMUM_WIDTH_SCREEN_FRACTION)
-            .round()
-            .max(1.0) as i32,
-        h: (f64::from(display.h.max(1)) * MINIMUM_HEIGHT_SCREEN_FRACTION)
-            .round()
-            .max(1.0) as i32,
+        w: MINIMUM_CONTROL_WIDTH,
+        h: MINIMUM_CONTROL_HEIGHT,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picture_in_picture_minimum_is_240_by_240_pixels() {
+        assert_eq!(minimum_control_size(), PhysicalSize { w: 240, h: 240 });
+    }
 
     #[test]
     fn landscape_video_fits_pink_guide_fraction_of_display() {
