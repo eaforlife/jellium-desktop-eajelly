@@ -42,17 +42,21 @@ pub mod window_source;
 
 pub use cef_host::CefHost;
 pub use geometry::{
-    BootGeometry, COVERED_SCALES, LogicalPoint, LogicalSize, PhysicalPoint, PhysicalSize, Scale,
-    SurfaceSize, WindowExtent, WindowGeometry, WindowPos,
+    BootGeometry, COVERED_SCALES, ExtentError, LogicalPoint, LogicalSize, MpvPlacement, MpvScreen,
+    PhysicalPoint, PhysicalSize, PlacedGeometry, PointsToPixelsError, Scale, ScreenName,
+    SurfacePlacement, SurfaceSize, TargetScreen, Unrepresentable, WebPoint, WindowBasis,
+    WindowExtent, WindowGeometry, WindowPlacement, WindowPoint, WindowPos, points_to_pixels,
+    web_top,
 };
 pub use instance::{Instance, InstanceId};
 pub use jfn_gpu_paint::DamageRect as JfnRect;
 pub use jfn_gpu_paint::WindowTarget;
 pub use media_sink::MediaSink;
 pub use menu::{
-    Generation, MENU_DISMISSED, MenuClose, MenuDelivery, MenuHost, MenuItem, MenuKind, MenuMetrics,
-    MenuPaint, MenuPlacement, MenuRequest, MenuScript, MenuSelection, PopupSurface, menu_delivery,
-    menu_has_selectable, menu_initial_row, menu_scripts,
+    Generation, MENU_DISMISSED, MenuClose, MenuDelivery, MenuHandle, MenuHideError, MenuHost,
+    MenuItem, MenuKind, MenuMetrics, MenuOpenError, MenuPaint, MenuPlacement, MenuRequest,
+    MenuScript, MenuSelection, MenuShutdownError, PopupSurface, menu_has_selectable,
+    menu_initial_row, menu_scripts,
 };
 pub use mpv_host::{DefaultMpvHost, MpvHost, VoWait};
 pub use osr_popup::{NoOsrPopup, OsrPopupSurface};
@@ -62,7 +66,7 @@ pub use stack::Plane;
 pub use visibility::{Ack, Visibility, VisibilityCommit};
 pub use window_owner::{AppCreatedWindow, MpvBootWindow, MpvCreatedWindow, WindowOwner};
 pub use window_source::{
-    WindowSnapshot, WindowSource, WindowSubscription, notify_window_changed,
+    WindowSource, WindowState, WindowStateError, WindowSubscription, notify_window_changed,
     subscribe_window_changed,
 };
 
@@ -468,12 +472,12 @@ pub trait Platform: Send + Sync {
     fn early_init(&self);
     /// `mpv` is the opaque libmpv `mpv_handle` — a raw C handle, stays raw.
     fn init(&self, access: &LifecycleAccess, mpv: *mut c_void) -> Result<(), PlatformInitError>;
-    fn cleanup(&self, access: &LifecycleAccess);
-    fn post_window_cleanup(&self, access: &LifecycleAccess);
+    fn cleanup(&self, access: &LifecycleAccess) -> Result<(), DetachError>;
+    fn post_window_cleanup(&self, access: &LifecycleAccess) -> Result<(), HostReleaseError>;
 
     // Per-surface
     /// The surface starts in `initial`; no surface is born at a default.
-    fn alloc_surface(&self, initial: Visibility) -> SurfaceHandle;
+    fn alloc_surface(&self, initial: Visibility, placement: SurfacePlacement) -> SurfaceHandle;
     fn free_surface(&self, s: SurfaceHandle);
     /// Presents `frame`, or hands it back undischarged when this surface has no
     /// commit stream for it.
@@ -505,7 +509,7 @@ pub trait Platform: Send + Sync {
 
     /// Applies the whole order, bottom first, in one transaction, and pins the
     /// video plane below every named surface.
-    fn apply_stack(&self, ordered: &[SurfaceHandle]);
+    fn apply_stack(&self, ordered: &[SurfaceHandle]) -> Result<(), StackError>;
 
     /// How this backend delivers `kind`; `Host` names the backend's own menu
     /// host.
@@ -529,9 +533,13 @@ pub trait Platform: Send + Sync {
     /// sink.
     fn media_session(&self) -> &dyn MediaSink;
 
-    fn cef_paths(&self) -> CefPaths;
+    fn cef_paths(&self) -> std::io::Result<CefPaths>;
 
     // Fullscreen
+    /// Observed mpv native-window replacement. Hosts with an app-owned window
+    /// need no rebind; Windows attaches its overlay/input/media to mpv's HWND.
+    fn on_window_handle_changed(&self, _id: i64) {}
+
     fn set_fullscreen(&self, v: bool);
     fn toggle_fullscreen(&self);
 
@@ -552,21 +560,21 @@ pub trait Platform: Send + Sync {
     fn resize_gate(&self) -> Option<&dyn ResizeGate>;
 
     /// The display scale this backend reports for the app window.
-    fn scale(&self) -> Scale;
+    fn scale(&self) -> Result<Scale, WindowStateError>;
 
     /// The display scale this backend reports for the display holding `at`,
     /// or for its own default display when `at` is `None`.
     fn display_scale(&self, at: Option<WindowPos>) -> Scale;
 
-    /// The window's current position in backing pixels, or `None` when this
-    /// backend has no window position to report.
-    fn query_window_position(&self) -> Option<WindowPos>;
+    fn window_position(&self) -> Result<Option<WindowPlacement>, WindowStateError>;
 
     /// Who creates the app window, and the live geometry authority for it.
     fn window_owner(&self) -> WindowOwner<'_>;
 
-    /// Clamp saved geometry to stay on-screen.
-    fn clamp_window_geometry(&self, g: WindowGeometry) -> WindowGeometry;
+    fn clamp_window_geometry(
+        &self,
+        g: &WindowGeometry,
+    ) -> Result<PlacedGeometry, geometry::ClampError>;
 
     fn pump(&self);
     /// Block the process main thread until [`wake_main_loop`] is called.
@@ -593,6 +601,7 @@ pub trait Platform: Send + Sync {
     /// The decoration mode currently in effect. Changes are announced via
     /// [`notify_decorations_changed`].
     fn effective_decorations(&self) -> EffectiveDecorations;
+    fn set_titlebar_present(&self, _present: bool) {}
 
     fn shared_texture_supported(&self) -> bool;
 
@@ -957,17 +966,21 @@ impl PreparedPlatform {
             _thread: std::marker::PhantomData,
         })
     }
-    pub fn cleanup<F, E>(self, terminate_window: F) -> Result<(), (E, PostWindowCleanup)>
+    pub fn cleanup<F, E>(self, terminate_window: F) -> Result<(), PreparedCleanupError<E>>
     where
         F: FnOnce() -> Result<(), E>,
     {
         let access = LifecycleAccess { _private: () };
-        self.platform.cleanup(&access);
-        PostWindowCleanup {
+        let detached = self.platform.cleanup(&access);
+        let rest = PostWindowCleanup {
             platform: self.platform,
             _thread: std::marker::PhantomData,
         }
-        .retry(terminate_window)
+        .retry(terminate_window);
+        match detached {
+            Ok(()) => rest.map_err(PreparedCleanupError::PostWindow),
+            Err(error) => Err(PreparedCleanupError::Detach { error, rest }),
+        }
     }
 }
 impl PlatformRuntime {
@@ -1031,17 +1044,21 @@ impl PlatformRuntime {
             }
         }
         let access = LifecycleAccess { _private: () };
-        self.platform().cleanup(&access);
+        let detached = self.platform().cleanup(&access);
         let remaining = PostWindowCleanup {
             platform: self.lease.platform,
             _thread: std::marker::PhantomData,
         };
-        remaining
-            .retry(terminate_window)
-            .map_err(|(error, post_window)| PlatformCleanupError::Termination {
-                error,
-                post_window,
-            })
+        let rest = remaining.retry(terminate_window);
+        match detached {
+            Ok(()) => rest.map_err(|failure| match failure {
+                PostWindowError::Termination { error, post_window } => {
+                    PlatformCleanupError::Termination { error, post_window }
+                }
+                PostWindowError::HostRelease(error) => PlatformCleanupError::HostRelease(error),
+            }),
+            Err(error) => Err(PlatformCleanupError::Detach { error, rest }),
+        }
     }
 }
 
@@ -1056,6 +1073,119 @@ pub enum PlatformCleanupError<F, E> {
         error: E,
         post_window: PostWindowCleanup,
     },
+    /// The window is gone and every cleanup phase ran; nothing is retained.
+    HostRelease(HostReleaseError),
+    Detach {
+        error: DetachError,
+        rest: Result<(), PostWindowError<E>>,
+    },
+}
+
+pub enum PreparedCleanupError<E> {
+    PostWindow(PostWindowError<E>),
+    Detach {
+        error: DetachError,
+        rest: Result<(), PostWindowError<E>>,
+    },
+}
+
+pub enum PostWindowError<E> {
+    /// Window termination is unconfirmed; the host is retained for a retry.
+    Termination {
+        error: E,
+        post_window: PostWindowCleanup,
+    },
+    /// The window is gone and post-window cleanup ran, but the backend could
+    /// not release something. Nothing is retained.
+    HostRelease(HostReleaseError),
+}
+
+#[derive(Debug)]
+pub struct DetachError {
+    operation: &'static str,
+    source: Box<dyn std::error::Error + Send + Sync>,
+}
+
+impl DetachError {
+    pub fn new(
+        operation: &'static str,
+        source: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Self {
+        Self {
+            operation,
+            source: source.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for DetachError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.operation, self.source)
+    }
+}
+impl std::error::Error for DetachError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.source)
+    }
+}
+
+#[derive(Debug)]
+pub struct StackError {
+    operation: &'static str,
+    source: Box<dyn std::error::Error + Send + Sync>,
+}
+
+impl StackError {
+    pub fn new(
+        operation: &'static str,
+        source: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Self {
+        Self {
+            operation,
+            source: source.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for StackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.operation, self.source)
+    }
+}
+impl std::error::Error for StackError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.source)
+    }
+}
+
+/// A backend resource that outlives the window could not be released.
+#[derive(Debug)]
+pub struct HostReleaseError {
+    operation: &'static str,
+    source: Box<dyn std::error::Error + Send + Sync>,
+}
+
+impl HostReleaseError {
+    pub fn new(
+        operation: &'static str,
+        source: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Self {
+        Self {
+            operation,
+            source: source.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for HostReleaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.operation, self.source)
+    }
+}
+impl std::error::Error for HostReleaseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.source)
+    }
 }
 
 /// Backend detachment completed; the host must remain until window termination
@@ -1071,20 +1201,20 @@ impl PostWindowCleanup {
     pub fn retry<E>(
         self,
         terminate_window: impl FnOnce() -> Result<(), E>,
-    ) -> Result<(), (E, Self)> {
+    ) -> Result<(), PostWindowError<E>> {
         match terminate_window() {
-            Ok(()) => {
-                self.finish();
-                Ok(())
-            }
-            Err(error) => Err((error, self)),
+            Ok(()) => self.finish().map_err(PostWindowError::HostRelease),
+            Err(error) => Err(PostWindowError::Termination {
+                error,
+                post_window: self,
+            }),
         }
     }
     /// The owner calls this only after successfully running retained window
     /// termination work. No other backend cleanup operation is repeated.
-    pub fn finish(self) {
+    pub fn finish(self) -> Result<(), HostReleaseError> {
         self.platform
-            .post_window_cleanup(&LifecycleAccess { _private: () });
+            .post_window_cleanup(&LifecycleAccess { _private: () })
     }
     /// Retain the native host until process exit when termination is uncertain.
     pub fn abandon(self) {}

@@ -1,7 +1,7 @@
 //! Application menu policy, composed into the shell and CEF adapters at startup.
 
 use jfn_platform_abi::{
-    LogicalPoint, MenuDelivery, MenuItem, MenuKind, MenuRequest, MenuSelection,
+    MenuDelivery, MenuItem, MenuKind, MenuOpenError, MenuRequest, MenuSelection, WindowPoint,
 };
 
 // CEF's custom command range. Shell edit menus use their own request-local IDs.
@@ -40,23 +40,28 @@ fn dispatch(id: i32) -> bool {
     true
 }
 
-fn open_host(point: LogicalPoint, restricted: bool) {
+fn open_host(
+    anchor: WindowPoint,
+    basis: jfn_platform_abi::WindowBasis,
+    restricted: bool,
+) -> Result<(), MenuOpenError> {
     let Some(platform) = jfn_platform_abi::try_lease() else {
-        return;
+        return Ok(());
     };
     let MenuDelivery::Host(host) = platform.menu_delivery(MenuKind::ContextMenu) else {
-        return;
+        return Ok(());
     };
     host.open(MenuRequest {
         items: items(restricted),
-        x: point.x,
-        y: point.y,
+        anchor,
+        basis,
         width: 0,
         initial: jfn_platform_abi::MENU_DISMISSED,
         on_selected: MenuSelection::new(|id| {
             dispatch(id);
         }),
-    });
+    })
+    .map(drop)
 }
 
 pub(crate) fn shell_actions() -> crate::shell::ApplicationActions {

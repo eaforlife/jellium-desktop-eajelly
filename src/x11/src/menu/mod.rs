@@ -7,6 +7,7 @@ use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, LoopHandle, LoopSignal, RegistrationToken};
 use parking_lot::Mutex;
 use x11rb::connection::Connection;
+use x11rb::errors::{ConnectionError, ReplyError, ReplyOrIdError};
 use x11rb::protocol::Event;
 use x11rb::protocol::shm::ConnectionExt as ShmConnectionExt;
 use x11rb::protocol::xinput::{self, ConnectionExt as _, XIEventMask};
@@ -16,37 +17,98 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::RustConnection;
 
-use jfn_linux_util::menu::{MenuPoint, SoftwareMenu};
+use jfn_linux_util::menu::{MenuInputEvent, MenuPoint, MenuSpawnError, SoftwareMenu};
 use jfn_platform_abi::{
-    Generation, LogicalPoint, MenuClose, MenuHost, MenuMetrics, MenuPaint, MenuPlacement,
-    PhysicalSize, PopupSurface,
+    Generation, MENU_DISMISSED, MenuClose, MenuHandle, MenuHost, MenuMetrics, MenuOpenError,
+    MenuPaint, MenuPlacement, MenuRequest, MenuShutdownError, PhysicalSize, PopupSurface,
+    Unrepresentable, WindowBasis, WindowPoint,
 };
 
 use crate::conn_source::X11Source;
 use crate::shm::{shm_alloc, shm_free};
 use crate::x11_state::ShmBuffer;
 
-/// The smallest window `CreateWindow` admits: it answers a zero width or
-/// height with `BadValue`.
-const ARMED_SIZE: PhysicalSize = PhysicalSize { w: 1, h: 1 };
-
 // Preserve the former 40 × 5 ms failure bound, without periodic retries.
 const GRAB_WAIT: Duration = Duration::from_millis(200);
 
 static MENU: OnceLock<SoftwareMenu> = OnceLock::new();
 
-pub fn warm() {
-    host().warm();
+#[derive(Debug, thiserror::Error)]
+enum BuildError {
+    #[error("no host services, paint services, published parent or screen")]
+    NoMenuSite,
+    #[error(transparent)]
+    Anchor(#[from] Unrepresentable),
+    #[error(transparent)]
+    Id(#[from] ReplyOrIdError),
+    #[error(transparent)]
+    Connection(#[from] ConnectionError),
+    #[error(transparent)]
+    Reply(#[from] ReplyError),
+    #[error("{cause}; releasing the window failed: {cleanup}")]
+    Unwind {
+        #[source]
+        cause: Box<BuildError>,
+        cleanup: ConnectionError,
+    },
 }
 
-pub fn host() -> &'static SoftwareMenu {
-    MENU.get_or_init(|| {
-        let surface = Arc::new(X11PopupSurface {
-            tx: Mutex::new(None),
-        });
-        spawn_popup(&surface);
-        SoftwareMenu::spawn(surface)
-    })
+#[derive(Debug, thiserror::Error)]
+enum PresentError {
+    #[error("no shared memory buffer")]
+    Shm,
+    #[error(transparent)]
+    Connection(#[from] ConnectionError),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum QueueError {
+    #[error("popup thread not running")]
+    NotRunning,
+    #[error("popup thread gone")]
+    Gone,
+}
+
+pub fn start() -> Result<(), MenuSpawnError> {
+    if MENU.get().is_some() {
+        return Ok(());
+    }
+    let surface = Arc::new(X11PopupSurface {
+        tx: Mutex::new(None),
+    });
+    spawn_popup(&surface).map_err(|source| MenuSpawnError::Thread {
+        thread: "menu popup",
+        source,
+    })?;
+    let menu = SoftwareMenu::spawn(surface)?;
+    MENU.get_or_init(|| menu).warm();
+    Ok(())
+}
+
+fn dismiss(generation: Generation) {
+    if let Some(menu) = MENU.get() {
+        menu.on_done(generation);
+    }
+}
+
+pub(crate) struct X11MenuHost;
+
+impl MenuHost for X11MenuHost {
+    fn open(&self, req: MenuRequest) -> Result<MenuHandle, MenuOpenError> {
+        let Some(menu) = MENU.get() else {
+            req.on_selected.resolve(MENU_DISMISSED);
+            return Err(MenuOpenError::EngineUnavailable);
+        };
+        menu.open(req)
+    }
+
+    fn hide(&self, handle: MenuHandle) -> Result<(), jfn_platform_abi::MenuHideError> {
+        MENU.get().map_or(Ok(()), |menu| menu.hide(handle))
+    }
+
+    fn shutdown(&self) -> Result<(), MenuShutdownError> {
+        MENU.get().map_or(Ok(()), MenuHost::shutdown)
+    }
 }
 
 struct X11PopupSurface {
@@ -54,13 +116,10 @@ struct X11PopupSurface {
 }
 
 impl X11PopupSurface {
-    /// False when the op could not be queued for the popup thread.
-    fn send(&self, op: Op) -> bool {
+    fn send(&self, op: Op) -> Result<(), QueueError> {
         let slot = self.tx.lock();
-        let Some(tx) = slot.as_ref() else {
-            return false;
-        };
-        tx.send(op).is_ok()
+        let tx = slot.as_ref().ok_or(QueueError::NotRunning)?;
+        tx.send(op).map_err(|_| QueueError::Gone)
     }
 
     /// Stops accepting ops, then dismisses every menu left in the queue. `rx` is
@@ -72,14 +131,14 @@ impl X11PopupSurface {
             rx.into_iter()
                 .flat_map(|rx| {
                     std::iter::from_fn(move || rx.try_recv().ok()).filter_map(|op| match op {
-                        Op::Arm { generation, .. } => Some(generation),
+                        Op::Create { generation, .. } => Some(generation),
                         _ => None,
                     })
                 })
                 .collect()
         };
         for generation in doomed {
-            host().on_done(generation);
+            dismiss(generation);
         }
     }
 }
@@ -92,36 +151,32 @@ impl PopupSurface for X11PopupSurface {
         }
     }
 
-    fn arm(&self, generation: Generation, anchor: LogicalPoint, _serial: u32) {
-        if !self.send(Op::Arm { generation, anchor }) {
-            tracing::error!(target: "x11::menu", "popup thread gone; dismissing menu");
-            host().on_done(generation);
+    fn window_basis(&self) -> WindowBasis {
+        WindowBasis::FIXED
+    }
+
+    fn create(&self, generation: Generation, place: MenuPlacement) {
+        if let Err(e) = self.send(Op::Create { generation, place }) {
+            tracing::error!(target: "x11::menu", "create: {e}; dismissing menu");
+            dismiss(generation);
         }
     }
 
-    // the grab window is mapped and acquisition started by `Op::Arm`;
-    // there is no second mapping to do
-    fn map_armed(&self, _generation: Generation) {}
-
-    fn reposition(&self, generation: Generation, place: MenuPlacement) {
-        self.send(Op::Reposition { generation, place });
-    }
-
     fn present(&self, paint: MenuPaint) {
-        self.send(Op::Present(paint));
+        if let Err(e) = self.send(Op::Present(paint)) {
+            tracing::error!(target: "x11::menu", "present: {e}");
+        }
     }
 
     fn destroy(&self, generation: Generation, _reason: MenuClose) {
-        self.send(Op::Destroy { generation });
+        if let Err(e) = self.send(Op::Destroy { generation }) {
+            tracing::error!(target: "x11::menu", "destroy: {e}");
+        }
     }
 }
 
 enum Op {
-    Arm {
-        generation: Generation,
-        anchor: LogicalPoint,
-    },
-    Reposition {
+    Create {
         generation: Generation,
         place: MenuPlacement,
     },
@@ -131,27 +186,24 @@ enum Op {
     },
 }
 
-/// Installs the sender and starts the popup thread; on spawn failure the slot
-/// is left empty and menus dismiss on arrival.
-fn spawn_popup(surface: &Arc<X11PopupSurface>) {
+fn spawn_popup(surface: &Arc<X11PopupSurface>) -> std::io::Result<()> {
     let (tx, rx) = calloop::channel::channel::<Op>();
     let thread_surface = Arc::clone(surface);
-    match std::thread::Builder::new()
+    std::thread::Builder::new()
         .name("jfn-x11-menu".into())
-        .spawn(move || popup_thread(&thread_surface, rx))
-    {
-        Ok(_) => *surface.tx.lock() = Some(tx),
-        Err(e) => {
-            tracing::error!(target: "x11::menu", "popup thread spawn failed: {e}; menus disabled");
-        }
-    }
+        .spawn(move || popup_thread(&thread_surface, rx))?;
+    *surface.tx.lock() = Some(tx);
+    Ok(())
 }
 
 fn popup_thread(surface: &Arc<X11PopupSurface>, rx: Channel<Op>) {
-    let Ok((conn, screen)) = x11rb::connect(None) else {
-        tracing::error!(target: "x11::menu", "popup: X11 connect failed; menus disabled");
-        surface.close(Some(rx));
-        return;
+    let (conn, screen) = match x11rb::connect(None) {
+        Ok(connected) => connected,
+        Err(e) => {
+            tracing::error!(target: "x11::menu", "popup: X11 connect: {e}; menus disabled");
+            surface.close(Some(rx));
+            return;
+        }
     };
     let conn = Arc::new(conn);
     let Ok(mut event_loop) = EventLoop::<'static, PopupLoop>::try_new() else {
@@ -176,12 +228,18 @@ fn popup_thread(surface: &Arc<X11PopupSurface>, rx: Channel<Op>) {
     // XI 2.1 delivers raw releases even while another client owns the grab.
     // Select before the first attempt, so a release cannot be lost between a
     // failed grab and arming its wakeup. Selection lasts only while waiting.
-    let raw_root = conn
+    let raw_root = match conn
         .xinput_xi_query_version(2, 1)
-        .ok()
-        .and_then(|cookie| cookie.reply().ok())
-        .filter(|version| (version.major_version, version.minor_version) >= (2, 1))
-        .map(|_| conn.setup().roots[screen].root);
+        .map_err(ReplyError::from)
+        .and_then(|cookie| cookie.reply())
+    {
+        Ok(version) => ((version.major_version, version.minor_version) >= (2, 1))
+            .then(|| conn.setup().roots[screen].root),
+        Err(e) => {
+            tracing::warn!(target: "x11::menu", "popup: XInput query: {e}; grabs wait out contention");
+            None
+        }
+    };
     let mut state = PopupLoop {
         keymap: Keymap::query(&conn),
         conn,
@@ -195,7 +253,7 @@ fn popup_thread(surface: &Arc<X11PopupSurface>, rx: Channel<Op>) {
     if let Err(e) = event_loop.run(None, &mut state, |_| {}) {
         tracing::error!(target: "x11::menu", "popup: loop error: {e}");
     }
-    state.tear_down();
+    state.tear_down_reporting("popup exit");
     surface.close(None);
 }
 
@@ -216,6 +274,7 @@ impl Phase {
 
 struct Window {
     generation: Generation,
+    logical: jfn_platform_abi::LogicalSize,
     win: u32,
     gc: u32,
     buf: ShmBuffer,
@@ -236,7 +295,7 @@ impl PopupLoop {
         match event {
             calloop::channel::Event::Msg(op) => self.on_op(op),
             calloop::channel::Event::Closed => {
-                self.tear_down();
+                self.tear_down_reporting("channel closed");
                 self.signal.stop();
             }
         }
@@ -244,12 +303,16 @@ impl PopupLoop {
 
     fn on_op(&mut self, op: Op) {
         match op {
-            Op::Arm { generation, anchor } => self.arm(generation, anchor),
-            Op::Reposition { generation, place } => self.reposition(generation, place),
-            Op::Present(paint) => self.present(paint),
+            Op::Create { generation, place } => self.create(generation, place),
+            Op::Present(paint) => {
+                let generation = paint.generation;
+                if let Err(e) = self.present(paint) {
+                    tracing::error!(target: "x11::menu", "present {generation}: {e}");
+                }
+            }
             Op::Destroy { generation } => {
                 if self.owns(generation) {
-                    self.tear_down();
+                    self.tear_down_reporting("destroy");
                 }
             }
         }
@@ -261,16 +324,21 @@ impl PopupLoop {
             .is_some_and(|w| w.generation == generation)
     }
 
-    /// Map the grab window and acquire modality, waking on releases if busy.
-    fn arm(&mut self, generation: Generation, anchor: LogicalPoint) {
-        self.tear_down();
-        let Some(window) = self.build(generation, anchor, ARMED_SIZE) else {
-            host().on_done(generation);
-            return;
+    fn create(&mut self, generation: Generation, place: MenuPlacement) {
+        self.tear_down_reporting("create");
+        let window = match self.build(generation, place) {
+            Ok(window) => window,
+            Err(e) => {
+                tracing::error!(target: "x11::menu", "build: {e}; dismissing");
+                dismiss(generation);
+                return;
+            }
         };
         self.phase = Phase::Grabbing(window);
-        self.watch_releases(true);
-        self.try_grab();
+        if let Err(e) = self.watch_releases(true) {
+            tracing::warn!(target: "x11::menu", "raw release subscription: {e}; the grab deadline still applies");
+        }
+        self.report_grab();
         if !matches!(self.phase, Phase::Grabbing(_)) {
             return;
         }
@@ -282,27 +350,27 @@ impl PopupLoop {
                     // One final attempt covers owners releasing an explicit grab
                     // without a button/key event. This is a failure deadline, not
                     // a recurring poll.
-                    st.try_grab();
+                    st.report_grab();
                     if matches!(st.phase, Phase::Grabbing(_)) {
                         tracing::error!(target: "x11::menu", "grab: deadline expired; dismissing");
-                        st.tear_down();
-                        host().on_done(generation);
+                        st.tear_down_reporting("grab deadline");
+                        dismiss(generation);
                     }
                 }
                 TimeoutAction::Drop
             }) {
             Ok(token) => self.grab_timeout = Some(token),
             Err(_) => {
-                tracing::error!(target: "x11::menu", "arm: grab deadline setup failed; dismissing");
-                self.tear_down();
-                host().on_done(generation);
+                tracing::error!(target: "x11::menu", "create: grab deadline setup failed; dismissing");
+                self.tear_down_reporting("grab deadline setup");
+                dismiss(generation);
             }
         }
     }
 
-    fn watch_releases(&self, enabled: bool) {
+    fn watch_releases(&self, enabled: bool) -> Result<(), ReplyError> {
         let Some(root) = self.raw_root else {
-            return;
+            return Ok(());
         };
         let mask = if enabled {
             vec![XIEventMask::RAW_BUTTON_RELEASE | XIEventMask::RAW_KEY_RELEASE]
@@ -313,154 +381,131 @@ impl PopupLoop {
             deviceid: xinput::Device::ALL_MASTER.into(),
             mask,
         }];
-        if let Err(e) = self
-            .conn
-            .xinput_xi_select_events(root, &masks)
-            .map_err(|e| e.to_string())
-            .and_then(|cookie| cookie.check().map_err(|e| e.to_string()))
-        {
-            tracing::debug!(target: "x11::menu", "raw release subscription failed: {e}");
-        }
+        self.conn.xinput_xi_select_events(root, &masks)?.check()
     }
 
-    fn finish_grab_wait(&mut self) {
+    fn finish_grab_wait(&mut self) -> Result<(), ReplyError> {
         if let Some(token) = self.grab_timeout.take() {
             self.handle.remove(token);
         }
-        self.watch_releases(false);
+        self.watch_releases(false)
     }
 
-    /// On `None`, nothing is left on the server for the caller to clean up.
     fn build(
         &mut self,
         generation: Generation,
-        anchor: LogicalPoint,
-        size: PhysicalSize,
-    ) -> Option<Window> {
-        let snap = snapshot(&self.conn).or_else(|| {
-            tracing::warn!(target: "x11::menu", "build: no X11 state snapshot; dismissing");
-            None
-        })?;
-        let Some((wx, wy)) = self.place(&snap, anchor, size) else {
-            tracing::error!(target: "x11::menu", "anchor {},{} is unrepresentable at scale {}", anchor.x, anchor.y, snap.scale);
-            return None;
-        };
-        let win = self.conn.generate_id().ok()?;
+        place: MenuPlacement,
+    ) -> Result<Window, BuildError> {
+        let (anchor, size) = (place.anchor, place.view.physical());
+        let site = menu_site(&self.conn).ok_or(BuildError::NoMenuSite)?;
+        let (wx, wy) = self.place(&site, anchor, size)?;
+        let win = self.conn.generate_id()?;
         let aux = CreateWindowAux::new()
             .background_pixel(0)
             .border_pixel(0)
             .override_redirect(1)
             .event_mask(EventMask::EXPOSURE)
-            .colormap(snap.colormap);
-        if self
-            .conn
-            .create_window(
-                snap.depth,
-                win,
-                snap.root,
-                wx as i16,
-                wy as i16,
-                size.w as u16,
-                size.h as u16,
-                0,
-                WindowClass::INPUT_OUTPUT,
-                snap.visual,
-                &aux,
-            )
-            .is_err()
-        {
-            tracing::error!(target: "x11::menu", "build: create_window failed");
-            return None;
-        }
-        let Ok(gc) = self.conn.generate_id() else {
-            let _ = self.conn.destroy_window(win);
-            return None;
+            .colormap(site.colormap);
+        self.conn.create_window(
+            site.depth,
+            win,
+            site.root,
+            wx as i16,
+            wy as i16,
+            size.w as u16,
+            size.h as u16,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            site.visual,
+            &aux,
+        )?;
+        let gc = match self.conn.generate_id() {
+            Ok(gc) => gc,
+            Err(e) => return Err(self.unwind(e.into(), win, None)),
         };
-        let _ = self.conn.create_gc(gc, win, &CreateGCAux::new());
-        let _ = self.conn.map_window(win);
-        let _ = self
-            .conn
-            .configure_window(win, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE));
-        // Round-trip on the grabbing connection before grabbing — the window
-        // must be realized server-side or the grab races into a BadWindow.
-        let _ = self
-            .conn
-            .get_geometry(win)
-            .ok()
-            .and_then(|c| c.reply().ok());
+        if let Err(e) = self.realize(win, gc) {
+            return Err(self.unwind(e, win, Some(gc)));
+        }
         tracing::debug!(target: "x11::menu", "build: window 0x{win:x} created+mapped");
-        Some(Window {
+        Ok(Window {
             generation,
+            logical: place.view.logical(),
             win,
             gc,
             buf: ShmBuffer::empty(),
         })
     }
 
+    fn unwind(&self, cause: BuildError, win: u32, gc: Option<u32>) -> BuildError {
+        let released = gc
+            .map_or(Ok(()), |gc| self.conn.free_gc(gc).map(drop))
+            .and_then(|()| self.conn.destroy_window(win).map(drop));
+        match released {
+            Ok(()) => cause,
+            Err(cleanup) => BuildError::Unwind {
+                cause: Box::new(cause),
+                cleanup,
+            },
+        }
+    }
+
+    fn realize(&self, win: u32, gc: u32) -> Result<(), BuildError> {
+        let conn = &*self.conn;
+        let create_gc = conn.create_gc(gc, win, &CreateGCAux::new())?;
+        let map = conn.map_window(win)?;
+        let raise =
+            conn.configure_window(win, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE))?;
+        conn.get_geometry(win)
+            .map_err(ReplyError::from)
+            .and_then(|cookie| cookie.reply())?;
+        create_gc.check()?;
+        map.check()?;
+        raise.check()?;
+        Ok(())
+    }
+
     /// The root-relative top-left of a window of `size` whose anchor is
     /// `anchor`, kept inside the root.
-    ///
-    /// `None` when the scale does not map the anchor into buffer pixels.
-    fn place(&self, snap: &Snap, anchor: LogicalPoint, size: PhysicalSize) -> Option<(i32, i32)> {
+    fn place(
+        &self,
+        site: &MenuSite,
+        anchor: WindowPoint,
+        size: PhysicalSize,
+    ) -> Result<(i32, i32), Unrepresentable> {
         let (w, h) = (size.w, size.h);
-        let mut x = snap.parent_x + snap.scale.to_physical(anchor.x)?;
-        let mut y = snap.parent_y + snap.scale.to_physical(anchor.y)?;
-        if x + w > snap.root_w {
-            x = (snap.root_w - w).max(0);
+        let (anchor_x, anchor_y) = anchor.floor();
+        let mut x = site.parent_x + site.scale.to_physical(anchor_x)?;
+        let mut y = site.parent_y + site.scale.to_physical(anchor_y)?;
+        if x + w > site.root_w {
+            x = (site.root_w - w).max(0);
         }
-        if y + h > snap.root_h {
+        if y + h > site.root_h {
             let above = y - h;
             y = if above >= 0 {
                 above
             } else {
-                (snap.root_h - h).max(0)
+                (site.root_h - h).max(0)
             };
         }
-        Some((x.max(0), y.max(0)))
+        Ok((x.max(0), y.max(0)))
     }
 
-    fn reposition(&mut self, generation: Generation, place: MenuPlacement) {
-        if !self.owns(generation) {
-            return;
-        }
-        let Some(snap) = snapshot(&self.conn) else {
-            return;
-        };
-        let size = place.view.physical();
-        let Some((wx, wy)) = self.place(&snap, place.anchor, size) else {
-            tracing::error!(target: "x11::menu", "anchor {},{} is unrepresentable at scale {}", place.anchor.x, place.anchor.y, snap.scale);
-            return;
-        };
-        let Some(window) = self.phase.window() else {
-            return;
-        };
-        let _ = self.conn.configure_window(
-            window.win,
-            &ConfigureWindowAux::new()
-                .x(wx)
-                .y(wy)
-                .width(size.w as u32)
-                .height(size.h as u32),
-        );
-        let _ = self.conn.flush();
-    }
-
-    fn present(&mut self, paint: MenuPaint) {
+    fn present(&mut self, paint: MenuPaint) -> Result<(), PresentError> {
         if !self.owns(paint.generation) {
-            return;
+            return Ok(());
         }
         let conn = Arc::clone(&self.conn);
         let Some(window) = self.phase.window() else {
-            return;
+            return Ok(());
         };
         let (w, h) = (paint.buffer.w.max(1), paint.buffer.h.max(1));
         if !shm_alloc(&mut window.buf, &conn, w, h) {
-            return;
+            return Err(PresentError::Shm);
         }
         let pixels = window.buf.pixels_mut();
         let len = pixels.len().min(paint.pixels.len());
         pixels[..len].copy_from_slice(&paint.pixels[..len]);
-        let _ = conn.shm_put_image(
+        conn.shm_put_image(
             window.win,
             window.gc,
             w as u16,
@@ -476,76 +521,101 @@ impl PopupLoop {
             false,
             window.buf.seg(),
             0,
-        );
-        let _ = conn.flush();
+        )?;
+        Ok(conn.flush()?)
     }
 
-    fn try_grab(&mut self) {
+    fn try_grab(&mut self) -> Result<(), GrabError> {
         let Phase::Grabbing(window) = &self.phase else {
-            return;
+            return Ok(());
         };
-        let generation = window.generation;
+        let (generation, logical) = (window.generation, window.logical);
         match grab_modal(&self.conn, window.win) {
             GrabAttempt::Ready => {
-                self.finish_grab_wait();
+                let unwatched = self.finish_grab_wait();
                 let Phase::Grabbing(window) = std::mem::replace(&mut self.phase, Phase::Idle)
                 else {
-                    return;
+                    return unwatched.map_err(GrabError::Unwatch);
                 };
                 self.phase = Phase::Open(window);
                 tracing::debug!(target: "x11::menu", "grab: menu is modal");
-                host().on_ready(generation);
+                if let Some(menu) = MENU.get() {
+                    menu.on_ready(generation, logical);
+                }
+                unwatched.map_err(GrabError::Unwatch)
             }
-            GrabAttempt::Busy => {}
+            GrabAttempt::Busy => Ok(()),
             GrabAttempt::Failed => {
-                tracing::error!(target: "x11::menu", "grab: non-retryable failure; dismissing");
-                self.tear_down();
-                host().on_done(generation);
+                let torn_down = self.tear_down();
+                dismiss(generation);
+                match torn_down {
+                    Ok(()) => Err(GrabError::Refused),
+                    Err(e) => Err(GrabError::RefusedTearDown(e)),
+                }
             }
+        }
+    }
+
+    fn report_grab(&mut self) {
+        if let Err(e) = self.try_grab() {
+            tracing::error!(target: "x11::menu", "grab: {e}");
         }
     }
 
     fn on_event(&mut self, ev: Event) {
         if matches!(self.phase, Phase::Grabbing(_)) && grab_wakeup(&ev) {
-            self.try_grab();
+            self.report_grab();
             return;
         }
-        if !matches!(self.phase, Phase::Open(_)) {
+        let Phase::Open(window) = &self.phase else {
             return;
-        }
-        match ev {
-            Event::Expose(_) => host().expose(),
-            Event::MotionNotify(e) => host().motion(MenuPoint::Physical {
-                x: c_int::from(e.event_x),
-                y: c_int::from(e.event_y),
-            }),
-            Event::ButtonPress(e) => host().press(MenuPoint::Physical {
-                x: c_int::from(e.event_x),
-                y: c_int::from(e.event_y),
-            }),
-            Event::KeyPress(e) => host().key(self.keymap.lookup(e.detail)),
-            _ => {}
+        };
+        let pointer = |x: i16, y: i16, press: bool| MenuInputEvent::Pointer {
+            at: MenuPoint::Physical {
+                x: c_int::from(x),
+                y: c_int::from(y),
+            },
+            press,
+        };
+        let event = match ev {
+            Event::Expose(_) => MenuInputEvent::Expose,
+            Event::MotionNotify(e) => pointer(e.event_x, e.event_y, false),
+            Event::ButtonPress(e) => pointer(e.event_x, e.event_y, true),
+            Event::KeyPress(e) => MenuInputEvent::Key(self.keymap.lookup(e.detail)),
+            _ => return,
+        };
+        if let Some(menu) = MENU.get() {
+            menu.input(window.generation, event);
         }
     }
 
-    fn tear_down(&mut self) {
-        self.finish_grab_wait();
+    fn tear_down_reporting(&mut self, context: &str) {
+        if let Err(e) = self.tear_down() {
+            tracing::error!(target: "x11::menu", "tear_down ({context}): {e}");
+        }
+    }
+
+    fn tear_down(&mut self) -> Result<(), ReplyError> {
+        let unwatched = self.finish_grab_wait();
         let (Phase::Grabbing(mut window) | Phase::Open(mut window)) =
             std::mem::replace(&mut self.phase, Phase::Idle)
         else {
-            return;
+            return unwatched;
         };
-        let _ = self.conn.ungrab_pointer(x11rb::CURRENT_TIME);
-        let _ = self.conn.ungrab_keyboard(x11rb::CURRENT_TIME);
+        let pointer = self.conn.ungrab_pointer(x11rb::CURRENT_TIME).map(drop);
+        let keyboard = self.conn.ungrab_keyboard(x11rb::CURRENT_TIME).map(drop);
         shm_free(&mut window.buf, Some(&*self.conn));
-        let _ = self.conn.free_gc(window.gc);
-        let _ = self.conn.destroy_window(window.win);
-        let _ = self.conn.flush();
+        let gc = self.conn.free_gc(window.gc).map(drop);
+        let destroyed = self.conn.destroy_window(window.win).map(drop);
+        let flushed = self.conn.flush();
         tracing::debug!(target: "x11::menu", "tear_down: window 0x{:x} gone", window.win);
+        unwatched?;
+        pointer.and(keyboard).and(gc).and(destroyed).and(flushed)?;
+        Ok(())
     }
 }
 
-struct Snap {
+struct MenuSite {
     visual: u32,
     depth: u8,
     colormap: u32,
@@ -557,17 +627,17 @@ struct Snap {
     root_h: i32,
 }
 
-fn snapshot(conn: &RustConnection) -> Option<Snap> {
+fn menu_site(conn: &RustConnection) -> Option<MenuSite> {
     let host = crate::x11_state::host()?;
     let paint = crate::x11_state::paint()?;
-    let parent = crate::x11_state::parent_snapshot()?;
+    let parent = crate::x11_state::published_parent()?;
     let screen = conn
         .setup()
         .roots
         .iter()
         .find(|s| s.root == host.root)
         .or_else(|| conn.setup().roots.first())?;
-    Some(Snap {
+    Some(MenuSite {
         visual: paint.argb_visual,
         depth: paint.argb_depth,
         colormap: paint.colormap,
@@ -585,6 +655,16 @@ fn grab_wakeup(event: &Event) -> bool {
         event,
         Event::XinputRawButtonRelease(_) | Event::XinputRawKeyRelease(_)
     )
+}
+
+#[derive(Debug, thiserror::Error)]
+enum GrabError {
+    #[error("non-retryable failure; dismissed")]
+    Refused,
+    #[error("non-retryable failure; dismissed, teardown: {0}")]
+    RefusedTearDown(#[source] ReplyError),
+    #[error("modal, but raw release unsubscription: {0}")]
+    Unwatch(#[source] ReplyError),
 }
 
 #[derive(Debug, PartialEq, Eq)]

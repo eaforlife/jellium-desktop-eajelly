@@ -18,6 +18,12 @@ fn failed_backend_returns_its_cleanup_owner() -> Result<(), Box<dyn std::error::
                     jfn_platform_abi::PlatformCleanupError::Termination { error, .. } => {
                         match error {}
                     }
+                    jfn_platform_abi::PlatformCleanupError::HostRelease(error) => {
+                        return Err(error.into());
+                    }
+                    jfn_platform_abi::PlatformCleanupError::Detach { error, .. } => {
+                        return Err(error.into());
+                    }
                 }
             }
             return Err("initialization unexpectedly succeeded without a host window".into());
@@ -33,11 +39,20 @@ fn failed_backend_returns_its_cleanup_owner() -> Result<(), Box<dyn std::error::
     ));
     assert!(std::error::Error::source(&error).is_some());
     let mut terminated = false;
-    if let Err((never, _)) = prepared.cleanup(|| {
+    match prepared.cleanup(|| {
         terminated = true;
         Ok::<(), std::convert::Infallible>(())
     }) {
-        match never {}
+        Ok(()) => {}
+        Err(jfn_platform_abi::PreparedCleanupError::PostWindow(
+            jfn_platform_abi::PostWindowError::Termination { error, .. },
+        )) => match error {},
+        Err(jfn_platform_abi::PreparedCleanupError::PostWindow(
+            jfn_platform_abi::PostWindowError::HostRelease(error),
+        )) => return Err(error.into()),
+        Err(jfn_platform_abi::PreparedCleanupError::Detach { error, .. }) => {
+            return Err(error.into());
+        }
     }
     assert!(
         terminated,

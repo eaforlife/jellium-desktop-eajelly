@@ -8,12 +8,22 @@ use std::thread::{self, JoinHandle};
 
 use crossbeam_channel::Receiver;
 use jfn_mpv::{Event, PropertyValue};
-use jfn_platform_abi::{LogicalSize, Scale};
+use jfn_platform_abi::{ExtentError, LogicalSize, Scale, WindowStateError};
 
 use crate::ffi::post as post_input;
 use crate::ingest::{
     IngestCtx, IngestOut, IngestState, extent_at, ingest_event_for_ffi, ingest_property_for_ffi,
 };
+
+pub use crate::ingest::IngestError;
+
+#[derive(Debug, thiserror::Error)]
+pub enum WindowModeError {
+    #[error("window state: {0}")]
+    WindowState(#[source] WindowStateError),
+    #[error(transparent)]
+    Ingest(#[from] IngestError),
+}
 
 // ---------------------------------------------------------------------
 // Globals
@@ -33,7 +43,7 @@ pub const INGEST_FLAG_SHUTDOWN: u8 = 1;
 struct PlatformCtx<'a>(&'a dyn jfn_platform_abi::Platform);
 
 impl IngestCtx for PlatformCtx<'_> {
-    fn scale(&self) -> Scale {
+    fn scale(&self) -> Result<Scale, WindowStateError> {
         self.0.scale()
     }
 
@@ -51,6 +61,11 @@ fn dispatch(outs: Vec<IngestOut>) -> u8 {
     for o in outs {
         match o {
             IngestOut::Input(i) => post_input(i),
+            IngestOut::WindowHandleChanged(id) => {
+                if let Some(lease) = jfn_platform_abi::try_lease() {
+                    lease.platform().on_window_handle_changed(id);
+                }
+            }
             IngestOut::WindowExtentChanged => jfn_platform_abi::notify_window_changed(),
             IngestOut::Shutdown => flags |= INGEST_FLAG_SHUTDOWN,
         }
@@ -75,43 +90,49 @@ pub fn jfn_playback_window_id() -> Option<i64> {
     state().window_id()
 }
 
-/// Returns flag bits — see [`INGEST_FLAG_SHUTDOWN`].
 pub fn jfn_playback_ingest_mpv_event_owned(
     event: &Event,
     platform: &dyn jfn_platform_abi::Platform,
-) -> u8 {
-    let outs = ingest_event_for_ffi(event, state(), &PlatformCtx(platform));
-    dispatch(outs)
+) -> Result<u8, IngestError> {
+    let outs = ingest_event_for_ffi(event, state(), &PlatformCtx(platform))?;
+    Ok(dispatch(outs))
 }
 
-/// Reconcile the playback window mode from the current window snapshot.
-/// Idempotent — the state machine dedupes, so an unchanged mode emits
-/// nothing.
-pub fn jfn_playback_reconcile_window_mode() {
+pub fn jfn_playback_reconcile_window_mode() -> Result<(), WindowModeError> {
+    match reconcile_window_mode() {
+        Err(WindowModeError::WindowState(
+            WindowStateError::NoWindow | WindowStateError::WebOffsetUnstated,
+        )) => Ok(()),
+        reconciled => reconciled,
+    }
+}
+
+fn reconcile_window_mode() -> Result<(), WindowModeError> {
     let Some(lease) = jfn_platform_abi::try_lease() else {
-        return;
+        return Ok(());
     };
-    let snap = lease.platform().window_owner().source().snapshot();
-    post_window_state(snap.fullscreen, snap.maximized);
+    let window = lease
+        .platform()
+        .window_owner()
+        .source()
+        .window_state()
+        .map_err(WindowModeError::WindowState)?;
+    post_window_mode(window.fullscreen, window.maximized)?;
+    Ok(())
 }
 
-/// Push the window mode through the same digest path the `fullscreen` /
-/// `window-maximized` property observations drive.
-///
-/// `FULLSCREEN` must digest first: entering fullscreen reads the *stored*
-/// maximized flag for `was_maximized`, and a fullscreen snapshot carries
-/// `maximized == false` (the modes are mutually exclusive), which must not
-/// clobber that flag before it is read.
-fn post_window_state(fullscreen: bool, maximized: bool) {
+fn post_window_mode(fullscreen: bool, maximized: bool) -> Result<(), IngestError> {
     use crate::ingest::observe_id::{FULLSCREEN, WINDOW_MAX};
     let Some(lease) = jfn_platform_abi::try_lease() else {
-        return;
+        return Ok(());
     };
     let ctx = PlatformCtx(lease.platform());
-    let outs = ingest_property_for_ffi(FULLSCREEN, &PropertyValue::Flag(fullscreen), state(), &ctx);
+    let outs =
+        ingest_property_for_ffi(FULLSCREEN, &PropertyValue::Flag(fullscreen), state(), &ctx)?;
     dispatch(outs);
-    let outs = ingest_property_for_ffi(WINDOW_MAX, &PropertyValue::Flag(maximized), state(), &ctx);
+    let outs = ingest_property_for_ffi(WINDOW_MAX, &PropertyValue::Flag(maximized), state(), &ctx)?;
     dispatch(outs);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------
@@ -130,24 +151,30 @@ pub fn jfn_playback_window_maximized() -> bool {
 /// the host's current logical content size, then wakes the window-changed
 /// subscribers. `false` when neither a logical content size nor a stored
 /// extent is available.
-pub fn jfn_playback_rescale_window_extent() -> bool {
+#[derive(Debug, thiserror::Error)]
+pub enum RescaleError {
+    #[error("window scale: {0}")]
+    Scale(#[from] WindowStateError),
+    #[error(transparent)]
+    Extent(#[from] ExtentError),
+}
+
+pub fn jfn_playback_rescale_window_extent() -> Result<bool, RescaleError> {
     let Some(lease) = jfn_platform_abi::try_lease() else {
-        return false;
+        return Ok(false);
     };
     let plat = lease.platform();
     let logical = match plat.mpv_host().logical_content_size() {
         Some(logical) => logical,
         None => match state().window_extent() {
             Some(extent) => extent.logical(),
-            None => return false,
+            None => return Ok(false),
         },
     };
-    let Some(extent) = extent_at(plat.scale(), logical) else {
-        return false;
-    };
+    let extent = extent_at(plat.scale()?, logical)?;
     state().set_window_extent(extent);
     jfn_platform_abi::notify_window_changed();
-    true
+    Ok(true)
 }
 
 pub fn jfn_playback_display_hz() -> f64 {
@@ -362,10 +389,14 @@ fn ingest_events(rx: Receiver<Event>) {
         let Some(lease) = jfn_platform_abi::try_lease() else {
             return;
         };
-        let outs = ingest_event_for_ffi(&event, state(), &PlatformCtx(lease.platform()));
-        if dispatch(outs) & INGEST_FLAG_SHUTDOWN != 0 {
-            invoke_shutdown_handler();
-            return;
+        match ingest_event_for_ffi(&event, state(), &PlatformCtx(lease.platform())) {
+            Ok(outs) => {
+                if dispatch(outs) & INGEST_FLAG_SHUTDOWN != 0 {
+                    invoke_shutdown_handler();
+                    return;
+                }
+            }
+            Err(e) => tracing::error!(target: "mpv", "{e}"),
         }
     }
 }

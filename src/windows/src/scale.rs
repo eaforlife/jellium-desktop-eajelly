@@ -5,7 +5,9 @@ use std::num::NonZeroU64;
 
 #[cfg(target_os = "windows")]
 use jfn_platform_abi::WindowPos;
-use jfn_platform_abi::{LogicalPoint, PhysicalPoint, PhysicalSize, Scale, WindowExtent};
+use jfn_platform_abi::{
+    ExtentError, LogicalPoint, PhysicalPoint, PhysicalSize, Scale, WindowExtent, WindowStateError,
+};
 
 /// The DPI every Windows scale is expressed against.
 pub const BASE_DPI: NonZeroU64 = match NonZeroU64::new(96) {
@@ -51,19 +53,41 @@ pub fn display_scale(at: Option<WindowPos>) -> Scale {
 ///
 /// Windows publishes no logical size, so this backend divides the client
 /// size by the scale that DPI names.
-///
-/// `None` when the DPI is zero, when the division names no logical size, or
-/// when either axis is below two pixels.
-pub fn extent(client: PhysicalSize, dpi: u32) -> Option<WindowExtent> {
-    let scale = scale_from_dpi(dpi)?;
-    WindowExtent::new(client, scale, client.to_logical(scale)?)
+pub fn extent(client: PhysicalSize, dpi: u32) -> Result<WindowExtent, ClientExtentError> {
+    let scale = scale_from_dpi(dpi).ok_or(ClientExtentError::ZeroDpi)?;
+    let logical = client.to_logical(scale).map_err(ExtentError::from)?;
+    Ok(WindowExtent::new(client, scale, logical)?)
 }
 
-/// The pointer position in the space `extent`'s logical size names.
-///
-/// The identity before the first sample exists.
-pub fn view_point(extent: Option<WindowExtent>, p: PhysicalPoint) -> LogicalPoint {
-    extent.map_or(LogicalPoint { x: p.x, y: p.y }, |e| e.to_logical_point(p))
+#[derive(Copy, Clone, Debug, PartialEq, thiserror::Error)]
+pub enum ClientExtentError {
+    #[error("the window DPI is zero")]
+    ZeroDpi,
+    #[error("the window's client rect could not be read")]
+    ClientRect,
+    #[error(transparent)]
+    Extent(#[from] ExtentError),
+}
+
+impl From<ClientExtentError> for jfn_platform_abi::WindowStateError {
+    fn from(e: ClientExtentError) -> Self {
+        match e {
+            ClientExtentError::ZeroDpi => Self::ZeroDpi,
+            ClientExtentError::ClientRect => Self::ClientRect,
+            ClientExtentError::Extent(e) => Self::Extent(e),
+        }
+    }
+}
+
+pub fn view_point(
+    sampled: Result<WindowExtent, WindowStateError>,
+    p: PhysicalPoint,
+) -> Result<LogicalPoint, WindowStateError> {
+    match sampled {
+        Ok(extent) => Ok(extent.to_logical_point(p)),
+        Err(WindowStateError::NoWindow) => Ok(LogicalPoint { x: p.x, y: p.y }),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]
@@ -87,28 +111,28 @@ mod tests {
 
     #[test]
     fn the_extent_carries_the_reported_scale_at_every_covered_scale() {
-        let scales: Vec<Option<Scale>> = COVERED_DPI
+        let scales: Vec<Result<Scale, ClientExtentError>> = COVERED_DPI
             .into_iter()
-            .map(|dpi| Some(extent(CLIENT, dpi)?.scale()))
+            .map(|dpi| Ok(extent(CLIENT, dpi)?.scale()))
             .collect();
-        assert_eq!(scales, COVERED_SCALES.map(Some).to_vec());
+        assert_eq!(scales, COVERED_SCALES.map(Ok).to_vec());
     }
 
     #[test]
     fn the_last_physical_pixel_maps_to_the_last_logical_pixel_at_every_covered_scale() {
-        let corners: Vec<Option<(LogicalPoint, LogicalPoint)>> = COVERED_DPI
+        let corners: Vec<Result<(LogicalPoint, LogicalPoint), WindowStateError>> = COVERED_DPI
             .into_iter()
             .map(|dpi| {
                 let e = extent(CLIENT, dpi)?;
                 let logical = e.logical();
                 let last = view_point(
-                    Some(e),
+                    Ok(e),
                     PhysicalPoint {
                         x: CLIENT.w - 1,
                         y: CLIENT.h - 1,
                     },
-                );
-                Some((
+                )?;
+                Ok((
                     last,
                     LogicalPoint {
                         x: logical.w - 1,
@@ -117,26 +141,36 @@ mod tests {
                 ))
             })
             .collect();
-        let agrees: Vec<Option<bool>> = corners
+        let agrees: Vec<Result<bool, WindowStateError>> = corners
             .into_iter()
             .map(|pair| pair.map(|(got, want)| got == want))
             .collect();
-        assert_eq!(agrees, vec![Some(true); COVERED_DPI.len()]);
+        assert_eq!(agrees, vec![Ok(true); COVERED_DPI.len()]);
     }
 
     #[test]
     fn a_zero_dpi_reports_one() {
         assert_eq!(scale_from_dpi(0), None);
         assert_eq!(report_dpi("test", 0), Scale::ONE);
-        assert_eq!(extent(CLIENT, 0), None);
-        assert_eq!(extent(PhysicalSize { w: 0, h: 720 }, 96), None);
+        assert_eq!(extent(CLIENT, 0), Err(ClientExtentError::ZeroDpi));
+        let physical = PhysicalSize { w: 0, h: 720 };
+        assert_eq!(
+            extent(physical, 96),
+            Err(ClientExtentError::Extent(ExtentError::BelowTwoPixels {
+                physical,
+                logical: jfn_platform_abi::LogicalSize { w: 0, h: 720 },
+            }))
+        );
     }
 
     #[test]
     fn a_pointer_maps_by_the_identity_before_the_first_sample() {
         assert_eq!(
-            view_point(None, PhysicalPoint { x: 37, y: 11 }),
-            LogicalPoint { x: 37, y: 11 }
+            view_point(
+                Err(WindowStateError::NoWindow),
+                PhysicalPoint { x: 37, y: 11 }
+            ),
+            Ok(LogicalPoint { x: 37, y: 11 })
         );
     }
 }

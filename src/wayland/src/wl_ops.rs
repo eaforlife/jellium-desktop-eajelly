@@ -6,7 +6,9 @@
 //! C++ original.
 
 use jfn_gpu_paint::SharedTexture;
-use jfn_platform_abi::{Ack, Content, PaintFrame, Presented, Visibility, VisibilityCommit};
+use jfn_platform_abi::{
+    Ack, Content, PaintFrame, Presented, Unrepresentable, Visibility, VisibilityCommit,
+};
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 
@@ -25,8 +27,11 @@ fn core(rt: &WlRuntime) -> Option<parking_lot::MutexGuard<'_, WlState>> {
 
 /// The returned pointer is stable for the surface's lifetime; the caller owns
 /// it until `free_surface`.
-fn new_boxed(visibility: Visibility) -> *mut PlatformSurface {
-    Box::into_raw(Box::new(PlatformSurface::new(visibility)))
+fn new_boxed(
+    visibility: Visibility,
+    placement: jfn_platform_abi::SurfacePlacement,
+) -> *mut PlatformSurface {
+    Box::into_raw(Box::new(PlatformSurface::new(visibility, placement)))
 }
 
 unsafe fn drop_boxed(p: *mut PlatformSurface) {
@@ -43,12 +48,16 @@ unsafe fn surface_mut<'a>(p: *mut PlatformSurface) -> &'a mut PlatformSurface {
 // alloc / free / restack
 // =====================================================================
 
-pub(crate) fn alloc_surface(rt: &'static WlRuntime, initial: Visibility) -> *mut PlatformSurface {
+pub(crate) fn alloc_surface(
+    rt: &'static WlRuntime,
+    initial: Visibility,
+    placement: jfn_platform_abi::SurfacePlacement,
+) -> *mut PlatformSurface {
     // Take the lock before allocating: bailing out afterwards would leak the box.
     let Some(mut st) = core(rt) else {
         return std::ptr::null_mut();
     };
-    let ptr = new_boxed(initial);
+    let ptr = new_boxed(initial, placement);
     // SAFETY: ptr is freshly heap-allocated; no aliases yet.
     let s = unsafe { surface_mut(ptr) };
 
@@ -67,6 +76,11 @@ pub(crate) fn alloc_surface(rt: &'static WlRuntime, initial: Visibility) -> *mut
     s.layer_actor = Some(build_actor(rt, &st, &surface, &viewport, s.visibility));
     s.surface = Some(SurfaceRef::new(surface, viewport));
     crate::wl_state::parent_layer(&mut st, ptr);
+    if let Some(extent) = rt.window().window_extent()
+        && let Err(e) = place(s, extent)
+    {
+        tracing::error!(target: "Main", "new surface: {e}; left unplaced");
+    }
 
     crate::scene::dispatch(
         rt,
@@ -120,16 +134,26 @@ pub(crate) fn free_surface(rt: &'static WlRuntime, ptr: *mut PlatformSurface) {
 }
 
 /// Applies the whole order, bottom first, replacing whatever was applied before.
-pub(crate) fn restack(rt: &'static WlRuntime, ordered: &[*mut PlatformSurface]) {
-    let Some(mut st) = core(rt) else { return };
+pub(crate) fn restack(
+    rt: &'static WlRuntime,
+    ordered: &[*mut PlatformSurface],
+) -> Result<(), Unrepresentable> {
+    let Some(mut st) = core(rt) else {
+        return Ok(());
+    };
     st.stack.clear();
     st.stack.extend_from_slice(ordered);
+    let placed = match rt.window().window_extent() {
+        Some(extent) => place_all(ordered, extent),
+        None => Ok(()),
+    };
     let order: Vec<crate::scene::LayerId> = ordered
         .iter()
         .filter(|p| !p.is_null())
         .map(|p| crate::scene::LayerId(*p as usize))
         .collect();
     crate::scene::dispatch(rt, &mut st, crate::scene::SceneEvent::Order(order));
+    placed
 }
 
 // =====================================================================
@@ -169,32 +193,64 @@ pub(crate) fn set_visibility(
 // resize / window target
 // =====================================================================
 
-/// Positions the subsurface at its reserved top inset and shrinks the
-/// viewport destination by the same amount.
-pub(crate) fn surface_resize(
-    rt: &'static WlRuntime,
-    ptr: *mut PlatformSurface,
-    size: jfn_platform_abi::SurfaceSize,
-) {
-    if ptr.is_null() {
-        return;
-    }
-    let Some(st) = core(rt) else { return };
-    let s = unsafe { surface_mut(ptr) };
-    let logical = size.extent.logical();
-    let physical = size.extent.physical();
-    s.top_logical = size.logical_top.max(0);
-    s.top_physical = size.physical_top.max(0);
+struct Covered {
+    top: i32,
+    lw: i32,
+    lh: i32,
+    pw: i32,
+    ph: i32,
+}
+
+fn covered(
+    s: &PlatformSurface,
+    extent: crate::window_state::PublishedWindow,
+) -> Result<Covered, Unrepresentable> {
+    let (logical, physical) = (extent.logical(), extent.physical());
+    let top = match s.placement {
+        jfn_platform_abi::SurfacePlacement::Window => 0,
+        jfn_platform_abi::SurfacePlacement::BelowTitlebar => {
+            extent.web_top().unwrap_or(0).clamp(0, logical.h())
+        }
+    };
+    let top_physical = extent.scale().to_physical(top)?.clamp(0, physical.h());
+    Ok(Covered {
+        top,
+        lw: logical.w(),
+        lh: (logical.h() - top).max(1),
+        pw: physical.w(),
+        ph: (physical.h() - top_physical).max(1),
+    })
+}
+
+fn place(
+    s: &PlatformSurface,
+    extent: crate::window_state::PublishedWindow,
+) -> Result<(), Unrepresentable> {
+    let c = covered(s, extent)?;
     if let Some(sub) = s.subsurface.as_ref() {
-        sub.set_position(0, s.top_logical);
+        sub.set_position(0, c.top);
     }
     if let Some(surface) = s.surface.as_ref() {
-        surface.set_destination(logical.w, logical.h);
+        surface.set_destination(c.lw, c.lh);
     }
     if let Some(actor) = s.layer_actor.as_ref() {
-        actor.resize(logical.w, logical.h, physical.w, physical.h);
+        actor.resize(c.lw, c.lh, c.pw, c.ph);
     }
-    st.flush();
+    Ok(())
+}
+
+fn place_all(
+    surfaces: &[*mut PlatformSurface],
+    extent: crate::window_state::PublishedWindow,
+) -> Result<(), Unrepresentable> {
+    let mut placed = Ok(());
+    for &p in surfaces.iter().filter(|p| !p.is_null()) {
+        let result = place(unsafe { surface_mut(p) }, extent);
+        if placed.is_ok() {
+            placed = result;
+        }
+    }
+    placed
 }
 
 /// Marks the surface external, desynchronizes it, and hands back its swapchain
@@ -262,20 +318,6 @@ fn build_actor(
     )
 }
 
-/// The published window extent minus `s`'s reserved top inset — the size the
-/// subsurface actually covers.
-fn inset_extent(
-    s: &PlatformSurface,
-    extent: crate::window_state::WindowExtentSnapshot,
-) -> (i32, i32, i32, i32) {
-    (
-        extent.logical().w(),
-        (extent.logical().h() - s.top_logical).max(1),
-        extent.physical().w(),
-        (extent.physical().h() - s.top_physical).max(1),
-    )
-}
-
 /// The viewport the published window extent names, or
 /// [`ViewportState::UNPUBLISHED`] before the first publish.
 fn window_viewport(rt: &WlRuntime) -> ViewportState {
@@ -304,7 +346,7 @@ fn accepts(
     st: &WlState,
     s: &PlatformSurface,
     content: &Content<'_>,
-) -> Option<crate::window_state::WindowExtentSnapshot> {
+) -> Option<crate::window_state::PublishedWindow> {
     if s.surface.is_none() || !s.visibility.is_shown() || s.external || s.layer_actor.is_none() {
         return None;
     }
@@ -344,11 +386,17 @@ pub(crate) fn present<'a>(
     let Some(extent) = accepts(rt, &st, s, frame.content()) else {
         return Err(frame);
     };
-    let (lw, lh, pw, ph) = inset_extent(s, extent);
+    let c = match covered(s, extent) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(target: "Main", "surface top: {e}; frame not presented");
+            return Err(frame);
+        }
+    };
     let Some(actor) = s.layer_actor.as_ref() else {
         return Err(frame);
     };
-    actor.resize(lw, lh, pw, ph);
+    actor.resize(c.lw, c.lh, c.pw, c.ph);
     // Taken before the frame is consumed: the actor holds a frame the swapchain
     // could not take, and only the producer named here is owed its successor.
     let source = frame.source();
@@ -365,34 +413,24 @@ pub(crate) fn present<'a>(
     }))
 }
 
-pub(crate) fn on_configure(rt: &'static WlRuntime, fullscreen: bool) {
+pub(crate) fn on_configure(
+    rt: &'static WlRuntime,
+    fullscreen: bool,
+) -> Result<(), Unrepresentable> {
     let Some(ext) = rt.window().window_extent() else {
-        return;
+        return Ok(());
     };
-    let (lw, lh) = (ext.logical().w(), ext.logical().h());
-    let (pw, ph) = (ext.physical().w(), ext.physical().h());
 
-    let Some(mut st) = core(rt) else { return };
+    let Some(mut st) = core(rt) else {
+        return Ok(());
+    };
 
     st.was_fullscreen = fullscreen;
 
     crate::wl_state::ensure_root_locked(rt, &mut st);
 
-    for &p in &st.stack {
-        if p.is_null() {
-            continue;
-        }
-        let s = unsafe { surface_mut(p) };
-        let (slw, slh, spw, sph) = (
-            lw,
-            (lh - s.top_logical).max(1),
-            pw,
-            (ph - s.top_physical).max(1),
-        );
-        if let Some(actor) = s.layer_actor.as_ref() {
-            actor.resize(slw, slh, spw, sph);
-        }
-    }
+    let placed = place_all(&st.stack, ext);
 
     st.flush();
+    placed
 }

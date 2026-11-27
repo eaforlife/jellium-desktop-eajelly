@@ -46,17 +46,29 @@ impl Platform for X11Platform {
         crate::lifecycle::init()
     }
 
-    fn cleanup(&self, _access: &jfn_platform_abi::LifecycleAccess) {
+    fn cleanup(
+        &self,
+        _access: &jfn_platform_abi::LifecycleAccess,
+    ) -> Result<(), jfn_platform_abi::DetachError> {
         crate::lifecycle::cleanup();
+        Ok(())
     }
 
     // Runs after mpv_terminate_destroy: mpv's embedded window is gone, so the
     // top-level's connection can finally close.
-    fn post_window_cleanup(&self, _access: &jfn_platform_abi::LifecycleAccess) {
+    fn post_window_cleanup(
+        &self,
+        _access: &jfn_platform_abi::LifecycleAccess,
+    ) -> Result<(), jfn_platform_abi::HostReleaseError> {
         crate::geometry::drop_toplevel_connection();
+        Ok(())
     }
 
-    fn alloc_surface(&self, initial: Visibility) -> SurfaceHandle {
+    fn alloc_surface(
+        &self,
+        initial: Visibility,
+        _placement: jfn_platform_abi::SurfacePlacement,
+    ) -> SurfaceHandle {
         surface::alloc_surface(initial).to_handle()
     }
 
@@ -72,10 +84,8 @@ impl Platform for X11Platform {
         surface::present(SurfaceId::from_handle(s), frame)
     }
 
-    /// X11 owns the overlay's size through parent geometry; the only part of
-    /// the request this backend applies is the reserved top strip.
-    fn surface_resize(&self, s: SurfaceHandle, size: SurfaceSize) {
-        surface::surface_set_top_inset(SurfaceId::from_handle(s), size.physical_top);
+    fn surface_resize(&self, s: SurfaceHandle, _size: SurfaceSize) {
+        surface::surface_set_top_inset(SurfaceId::from_handle(s), 0);
     }
 
     fn surface_window_target(&self, s: SurfaceHandle) -> Option<jfn_platform_abi::WindowTarget> {
@@ -90,9 +100,9 @@ impl Platform for X11Platform {
         surface::set_visibility(SurfaceId::from_handle(s), visibility)
     }
 
-    fn apply_stack(&self, ordered: &[SurfaceHandle]) {
+    fn apply_stack(&self, ordered: &[SurfaceHandle]) -> Result<(), jfn_platform_abi::StackError> {
         let ids: Vec<SurfaceId> = ordered.iter().map(|&h| SurfaceId::from_handle(h)).collect();
-        surface::apply_stack(&ids);
+        surface::apply_stack(&ids)
     }
 
     fn menu_delivery(
@@ -101,7 +111,7 @@ impl Platform for X11Platform {
     ) -> jfn_platform_abi::MenuDelivery<'_> {
         match kind {
             jfn_platform_abi::MenuKind::ContextMenu => {
-                jfn_platform_abi::MenuDelivery::Host(crate::menu::host())
+                jfn_platform_abi::MenuDelivery::Host(&crate::menu::X11MenuHost)
             }
             jfn_platform_abi::MenuKind::Dropdown => jfn_platform_abi::MenuDelivery::Page,
         }
@@ -115,7 +125,7 @@ impl Platform for X11Platform {
         &crate::mpv_host::X11MpvHost
     }
 
-    fn cef_paths(&self) -> jfn_platform_abi::CefPaths {
+    fn cef_paths(&self) -> std::io::Result<jfn_platform_abi::CefPaths> {
         jfn_linux_util::cef_paths()
     }
 
@@ -148,15 +158,15 @@ impl Platform for X11Platform {
     }
 
     fn toggle_fullscreen(&self) {
-        let Some(snap) = crate::x11_state::parent_snapshot() else {
+        let Some(parent) = crate::x11_state::published_parent() else {
             tracing::warn!(target: "Platform", "no published geometry; nothing to gate");
             return;
         };
-        crate::geometry::set_parent_fullscreen(!snap.fullscreen);
+        crate::geometry::set_parent_fullscreen(!parent.fullscreen);
     }
 
-    fn scale(&self) -> jfn_platform_abi::Scale {
-        crate::scale::window_scale()
+    fn scale(&self) -> Result<jfn_platform_abi::Scale, jfn_platform_abi::WindowStateError> {
+        Ok(crate::scale::window_scale())
     }
 
     fn display_scale(&self, at: Option<WindowPos>) -> jfn_platform_abi::Scale {
@@ -168,20 +178,22 @@ impl Platform for X11Platform {
         WindowOwner::App(&crate::window_source::X11_WINDOW_SOURCE)
     }
 
-    fn query_window_position(&self) -> Option<WindowPos> {
-        let conn = crate::x11_state::x11rb_conn()?;
-        let host = crate::x11_state::host()?;
-        let (x, y, _, _) =
-            crate::lifecycle::query_parent_geometry_x11rb(&conn, host.toplevel, host.root)?;
-        Some(WindowPos { x, y })
+    fn window_position(
+        &self,
+    ) -> Result<Option<jfn_platform_abi::WindowPlacement>, jfn_platform_abi::WindowStateError> {
+        use jfn_platform_abi::WindowSource as _;
+        crate::window_source::X11_WINDOW_SOURCE.window_placement()
     }
 
     /// X11 constrains only the size; position is left to the WM.
-    fn clamp_window_geometry(&self, g: WindowGeometry) -> WindowGeometry {
-        match crate::lifecycle::screen_bounds() {
+    fn clamp_window_geometry(
+        &self,
+        g: &WindowGeometry,
+    ) -> Result<jfn_platform_abi::PlacedGeometry, jfn_platform_abi::geometry::ClampError> {
+        Ok(match crate::lifecycle::screen_bounds() {
             Some(bounds) => jfn_platform_abi::geometry::clamp_size_to_bounds(g, bounds),
-            None => g,
-        }
+            None => g.on_primary(),
+        })
     }
 
     // the geometry and input threads own their own loops

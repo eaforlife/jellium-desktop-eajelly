@@ -34,12 +34,18 @@ use std::sync::OnceLock;
 use parking_lot::{Condvar, Mutex};
 
 use actor::{Actor, Channel, Work};
-use jfn_platform_abi::{Plane, SurfaceHandle, SurfaceSize, Visibility};
+use jfn_platform_abi::{
+    Plane, SurfaceHandle, SurfacePlacement, SurfaceSize, Visibility, WindowStateError,
+};
 
 /// Application policy injected by the process composition root.
 #[derive(Clone, Copy)]
 pub struct ApplicationActions {
-    pub open_menu: fn(jfn_platform_abi::LogicalPoint, bool),
+    pub open_menu: fn(
+        jfn_platform_abi::WindowPoint,
+        jfn_platform_abi::WindowBasis,
+        bool,
+    ) -> Result<(), jfn_platform_abi::MenuOpenError>,
 }
 
 /// Owns its surface and actor. Drop requests a bounded stop. Unconfirmed
@@ -55,7 +61,6 @@ pub struct Shell {
 struct Subscriptions {
     _window: jfn_platform_abi::WindowSubscription,
     _refresh: jfn_gpu_paint::refresh::Subscription,
-    _decorations: jfn_platform_abi::DecorationsSubscription,
 }
 pub use actor::{JoinOutcome as ShutdownOutcome, LoopStartError};
 
@@ -108,6 +113,16 @@ pub enum StartError {
     StartupAlreadyClaimed,
     #[error("shell thread could not start: {0}")]
     Thread(#[from] std::io::Error),
+    #[error("shell overlay stacking: {0}")]
+    Stack(#[from] jfn_platform_abi::StackError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ShellShutdownError {
+    #[error("shell termination unconfirmed: {0:?}")]
+    Unterminated(ShutdownOutcome),
+    #[error("shell overlay unstacking: {0}")]
+    Unstacked(#[from] jfn_platform_abi::StackError),
 }
 /// The actor's sender, created before any thread exists, so work posted before
 /// the render thread starts is delivered when it does.
@@ -118,15 +133,12 @@ static SURFACE: Mutex<Option<SurfaceHandle>> = Mutex::new(None);
 static FONTS_READY: (Mutex<Option<Result<(), FontWarmupError>>>, Condvar) =
     (Mutex::new(None), Condvar::new());
 
-/// Publishes the routing state of a window with no shell overlay: no modal, no
-/// titlebar, no reserved strip, at the window's current logical size.
 pub(crate) fn publish_no_overlay() {
     let Some(lease) = jfn_platform_abi::try_lease() else {
         return;
     };
-    let plat = lease.platform();
+    lease.platform().set_titlebar_present(false);
     jfn_input::publish_shell_state(crate::shell::state::shell_state(
-        plat.window_owner().source().snapshot().extent,
         crate::shell::state::ChromeInputs::default(),
         false,
     ));
@@ -155,7 +167,7 @@ pub fn shell_start(
     }
 
     let plat = platform.platform();
-    let surface = plat.alloc_surface(Visibility::Hidden);
+    let surface = plat.alloc_surface(Visibility::Hidden, SurfacePlacement::Window);
     if surface == SurfaceHandle::NONE {
         publish_no_overlay();
         return Err(StartError::SurfaceAllocation);
@@ -167,12 +179,14 @@ pub fn shell_start(
         subscriptions: None,
         _thread: std::marker::PhantomData,
     };
-    jfn_platform_abi::stack::occupy(Plane::ShellOverlay, surface);
+    jfn_platform_abi::stack::occupy(Plane::ShellOverlay, surface)?;
     *SURFACE.lock() = Some(surface);
 
     // Declares that we present to it ourselves: from here the backend attaches
     // no buffer, grabs no input, and drops every present for this surface.
     let _claimed = plat.surface_window_target(surface);
+
+    plat.set_titlebar_present(true);
 
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     shell.actor = Some(Actor::spawn(
@@ -191,28 +205,25 @@ pub fn shell_start(
     jfn_color::theme::jfn_theme_color_subscribe(|rgb| {
         post(Work::ChromeBackground(theme::from_rgb(rgb)));
     });
-    let decorations = jfn_platform_abi::set_decorations_listener(push_decorations);
     let window = jfn_platform_abi::subscribe_window_changed(push_window_state);
-    push_decorations();
     push_window_state();
     push_playback_chrome();
 
     shell.subscriptions = Some(Subscriptions {
         _window: window,
         _refresh: refresh,
-        _decorations: decorations,
     });
     Ok((shell, Readiness(ready_rx)))
 }
 
 impl Shell {
-    pub fn shutdown(mut self) -> ShutdownOutcome {
+    pub fn shutdown(mut self) -> Result<(), ShellShutdownError> {
         self.stop()
     }
 
-    fn stop(&mut self) -> ShutdownOutcome {
+    fn stop(&mut self) -> Result<(), ShellShutdownError> {
         let Some(platform) = self.platform.take() else {
-            return ShutdownOutcome::Terminated;
+            return Ok(());
         };
         CLOSED.store(true, std::sync::atomic::Ordering::Release);
         self.subscriptions.take();
@@ -232,22 +243,19 @@ impl Shell {
         } else {
             ShutdownOutcome::Terminated
         };
-        {
-            if result.terminated() {
-                jfn_platform_abi::stack::vacate(Plane::ShellOverlay);
-                platform.platform().free_surface(self.surface);
-            } else {
-                let _ = Box::leak(Box::new(platform));
-            }
+        if !result.terminated() {
+            let _ = Box::leak(Box::new(platform));
+            return Err(ShellShutdownError::Unterminated(result));
         }
-        result
+        let unstacked = jfn_platform_abi::stack::vacate(Plane::ShellOverlay);
+        platform.platform().free_surface(self.surface);
+        Ok(unstacked?)
     }
 }
 impl Drop for Shell {
     fn drop(&mut self) {
-        let result = self.stop();
-        if !result.terminated() {
-            tracing::error!(?result, "shell termination unconfirmed; retaining platform");
+        if let Err(error) = self.stop() {
+            tracing::error!("shell drop: {error}");
         }
     }
 }
@@ -395,21 +403,6 @@ fn push_playback_chrome() {
     chrome::set_osd_visible(state.osd_visible);
 }
 
-fn push_decorations() {
-    let _surface_guard = SURFACE.lock();
-    if CLOSED.load(std::sync::atomic::Ordering::Acquire) {
-        return;
-    }
-    let Some(lease) = jfn_platform_abi::try_lease() else {
-        return;
-    };
-    let client_side = matches!(
-        lease.platform().effective_decorations(),
-        jfn_platform_abi::EffectiveDecorations::ClientSide
-    );
-    chrome::set_client_side_decorations(client_side);
-}
-
 fn push_window_state() {
     let surface_guard = SURFACE.lock();
     if CLOSED.load(std::sync::atomic::Ordering::Acquire) {
@@ -419,22 +412,23 @@ fn push_window_state() {
         return;
     };
     let plat = lease.platform();
-    let snap = plat.window_owner().source().snapshot();
-    chrome::set_fullscreen(snap.fullscreen);
-    let Some(extent) = snap.extent else { return };
-    post(Work::Resize { extent });
+    let window = match plat.window_owner().source().window_state() {
+        Ok(window) => window,
+        Err(WindowStateError::NoWindow | WindowStateError::WebOffsetUnstated) => return,
+        Err(e) => {
+            tracing::error!("shell: window state: {e}");
+            return;
+        }
+    };
+    let extent = window.extent;
+    post(Work::Window {
+        extent,
+        web_top: window.web_top,
+        basis: window.basis,
+    });
     let surface = surface_guard.unwrap_or(SurfaceHandle::NONE);
     if surface != SurfaceHandle::NONE {
-        // The overlay spans the whole window: the reserved strip is the web
-        // layer's inset, not the overlay's.
-        plat.surface_resize(
-            surface,
-            SurfaceSize {
-                extent,
-                logical_top: 0,
-                physical_top: 0,
-            },
-        );
+        plat.surface_resize(surface, SurfaceSize { extent });
     }
 }
 

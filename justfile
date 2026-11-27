@@ -2,7 +2,6 @@ set dotenv-load := true
 
 export JELLIUM_DESKTOP_LOG_LEVEL := env_var_or_default("JELLIUM_DESKTOP_LOG_LEVEL", "debug")
 export JELLIUM_DESKTOP_LOG_FILE := env_var_or_default("JELLIUM_DESKTOP_LOG_FILE", "build/run.log")
-export JFN_MPV_INCLUDE_DIR := "third_party/mpv/include"
 
 import 'dev/linux/linux.just'
 import 'dev/macos/macos.just'
@@ -45,6 +44,11 @@ test: build
 [windows]
 test: build
     . 'dev/windows/env.ps1'; cargo test --manifest-path src/Cargo.toml --workspace
+
+# Run the JS unit tests (node only; not part of `just test`, which is cargo)
+[group('test')]
+test-js:
+    node --test src/web/input-plugin.test.js
 
 # Format workspace
 [group('lint')]

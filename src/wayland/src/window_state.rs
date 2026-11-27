@@ -1,14 +1,8 @@
-//! The single owner of Wayland window geometry/scale state. Everything lives
-//! in ONE `RwLock<Inner>`: the scale the compositor stated and the last
-//! published extent. Readers that need several fields coherently take a
-//! single [`WindowState::window_extent`] snapshot; the per-field accessors read
-//! one field each and must not be composed into a geometry that spans two
-//! generations.
-
 use parking_lot::RwLock;
 
 use crate::runtime::WlRuntime;
-use jfn_platform_abi::Scale;
+use jfn_platform_abi::{Scale, Unrepresentable, WindowBasis};
+use std::ffi::c_int;
 
 use crate::scale::Scale120;
 use crate::wl_ops;
@@ -58,19 +52,41 @@ struct WindowExtent {
     mode: WindowMode,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
+pub(crate) enum BuildError {
+    #[error(transparent)]
+    Unrepresentable(#[from] Unrepresentable),
+    #[error("physical {w}x{h} has an axis below one pixel")]
+    BelowOnePixel { w: i32, h: i32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
+pub(crate) enum PublishError {
+    #[error("window extent {w}x{h}: {source}")]
+    Extent {
+        w: c_int,
+        h: c_int,
+        #[source]
+        source: BuildError,
+    },
+    #[error("window state placement: {0}")]
+    Placement(#[from] Unrepresentable),
+}
+
 impl WindowExtent {
     fn build(
         logical: WindowSize,
         scale: Scale120,
         mode: WindowMode,
         generation: u64,
-    ) -> Option<Self> {
+    ) -> Result<Self, BuildError> {
         let reported = scale.scale();
-        let physical = WindowSize::new(
+        let (w, h) = (
             reported.to_physical(logical.w())?,
             reported.to_physical(logical.h())?,
-        )?;
-        Some(Self {
+        );
+        let physical = WindowSize::new(w, h).ok_or(BuildError::BelowOnePixel { w, h })?;
+        Ok(Self {
             logical,
             physical,
             scale,
@@ -80,11 +96,44 @@ impl WindowExtent {
     }
 }
 
+impl WindowExtent {
+    fn same_size(&self, other: &WindowExtent) -> bool {
+        self.logical == other.logical
+            && self.physical == other.physical
+            && self.scale == other.scale
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Titlebar {
+    Unstated,
+    Present,
+    Absent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the published window state has moved on")]
+pub(crate) struct Superseded;
+
 struct Inner {
     scale: Option<Scale120>,
     unstated: crate::scale::UnstatedLog,
     extent: Option<WindowExtent>,
     generation: u64,
+    titlebar: Titlebar,
+    web_top: Option<c_int>,
+    basis: WindowBasis,
+}
+
+impl Inner {
+    fn set_web_top(&mut self, web_top: Option<c_int>) -> bool {
+        let changed = self.web_top != web_top;
+        if changed {
+            self.web_top = web_top;
+            self.basis = self.basis.next();
+        }
+        changed
+    }
 }
 
 pub(crate) struct WindowState {
@@ -93,21 +142,28 @@ pub(crate) struct WindowState {
 
 /// A coherent view of the window geometry from one lock acquisition.
 #[derive(Clone, Copy)]
-pub(crate) struct WindowExtentSnapshot {
+pub(crate) struct PublishedWindow {
     logical: WindowSize,
     physical: WindowSize,
     scale: Scale,
     mode: WindowMode,
+    web_top: Option<c_int>,
 }
 
-impl WindowExtentSnapshot {
-    fn from_extent(e: &WindowExtent) -> Self {
-        Self {
+impl PublishedWindow {
+    fn from_inner(st: &Inner) -> Option<Self> {
+        let e = st.extent.as_ref()?;
+        Some(Self {
             logical: e.logical,
             physical: e.physical,
             scale: e.scale.scale(),
             mode: e.mode,
-        }
+            web_top: st.web_top,
+        })
+    }
+
+    pub(crate) fn web_top(&self) -> Option<c_int> {
+        self.web_top
     }
 
     pub(crate) fn logical(&self) -> WindowSize {
@@ -135,16 +191,43 @@ impl WindowState {
                 unstated: crate::scale::UnstatedLog::new(),
                 extent: None,
                 generation: 0,
+                titlebar: Titlebar::Unstated,
+                web_top: None,
+                basis: WindowBasis::default(),
             }),
         }
     }
 
-    fn extent(&self) -> Option<WindowExtent> {
-        self.inner.read().extent
+    pub(crate) fn window_extent(&self) -> Option<PublishedWindow> {
+        PublishedWindow::from_inner(&self.inner.read())
     }
 
-    pub(crate) fn window_extent(&self) -> Option<WindowExtentSnapshot> {
-        self.extent().map(|e| WindowExtentSnapshot::from_extent(&e))
+    pub(crate) fn basis(&self) -> WindowBasis {
+        self.inner.read().basis
+    }
+
+    pub(crate) fn state(&self) -> (Option<PublishedWindow>, WindowBasis) {
+        let st = self.inner.read();
+        (PublishedWindow::from_inner(&st), st.basis)
+    }
+
+    pub(crate) fn with_basis<R>(
+        &self,
+        basis: WindowBasis,
+        f: impl FnOnce() -> R,
+    ) -> Result<R, Superseded> {
+        let st = self.inner.read();
+        if st.basis != basis {
+            return Err(Superseded);
+        }
+        Ok(f())
+    }
+
+    pub(crate) fn representable(&self, logical: WindowSize) -> Result<(), BuildError> {
+        match self.inner.read().scale {
+            Some(scale) => WindowExtent::build(logical, scale, WindowMode::Floating, 0).map(|_| ()),
+            None => Ok(()),
+        }
     }
 
     pub(crate) fn stated_scale(&self) -> Option<Scale120> {
@@ -184,53 +267,97 @@ impl WindowState {
         st.scale = Some(crate::scale::unstated(&mut st.unstated));
     }
 
-    /// Publishes the extent `logical`, `mode` and the stated scale name.
-    ///
-    /// Publishes nothing while no scale is stated; the present that the first
-    /// stated scale drives re-publishes the configure that arrived before it.
-    /// An extent the scale cannot build leaves the published extent and its
-    /// generation untouched, and says so.
-    ///
-    /// The consumer notifications below read the value back through the
-    /// accessors, so they must run after the write lock is released or they
-    /// deadlock.
-    pub(crate) fn publish(&self, rt: &'static WlRuntime, logical: WindowSize, mode: WindowMode) {
+    pub(crate) fn publish(
+        &self,
+        rt: &'static WlRuntime,
+        logical: WindowSize,
+        mode: WindowMode,
+    ) -> Result<(), PublishError> {
+        let decorations = rt.root().effective_decorations();
+        let fullscreen = mode == WindowMode::Fullscreen;
         let built = {
             let mut st = self.inner.write();
             let Some(scale) = st.scale else {
-                return;
+                return Ok(());
             };
-            let built = WindowExtent::build(logical, scale, mode, st.generation + 1);
-            if let Some(extent) = built {
-                st.generation = extent.generation;
-                st.extent = Some(extent);
+            match WindowExtent::build(logical, scale, mode, st.generation + 1) {
+                Ok(extent) => {
+                    let resized = st.extent.is_none_or(|old| !old.same_size(&extent));
+                    if resized {
+                        st.basis = st.basis.next();
+                    }
+                    st.generation = extent.generation;
+                    st.extent = Some(extent);
+                    let web_top = match st.titlebar {
+                        Titlebar::Unstated => None,
+                        stated => Some(jfn_platform_abi::web_top(
+                            decorations,
+                            fullscreen,
+                            stated == Titlebar::Present,
+                        )),
+                    };
+                    let moved = st.set_web_top(web_top);
+                    Ok((extent, st.web_top, resized || moved))
+                }
+                Err(e) => Err(e),
             }
-            built.ok_or(scale)
         };
-        let extent = match built {
-            Ok(extent) => extent,
-            Err(scale) => {
-                tracing::error!(
-                    target: "Main",
-                    "window extent {}x{} at scale {scale} is unrepresentable; the published extent stands",
-                    logical.w(),
-                    logical.h()
-                );
-                return;
-            }
-        };
+        let (extent, web_top, changed) = built.map_err(|source| PublishError::Extent {
+            w: logical.w(),
+            h: logical.h(),
+            source,
+        })?;
         tracing::debug!(
             target: "Main",
-            "window extent gen={} logical={}x{} physical={}x{} scale={}",
+            "window extent gen={} logical={}x{} physical={}x{} scale={} web_top={web_top:?}",
             extent.generation, extent.logical.w, extent.logical.h,
             extent.physical.w, extent.physical.h, extent.scale
         );
+        Ok(Self::published(rt, fullscreen, changed)?)
+    }
 
-        let fullscreen = mode == WindowMode::Fullscreen;
-        if rt.try_core().is_some() {
-            wl_ops::on_configure(rt, fullscreen);
-        }
+    pub(crate) fn set_titlebar_present(
+        &self,
+        rt: &'static WlRuntime,
+        present: bool,
+    ) -> Result<(), Unrepresentable> {
+        let decorations = rt.root().effective_decorations();
+        let (fullscreen, changed) = {
+            let mut st = self.inner.write();
+            let titlebar = if present {
+                Titlebar::Present
+            } else {
+                Titlebar::Absent
+            };
+            if st.titlebar == titlebar {
+                return Ok(());
+            }
+            st.titlebar = titlebar;
+            let Some(extent) = st.extent else {
+                return Ok(());
+            };
+            let fullscreen = extent.mode == WindowMode::Fullscreen;
+            let web_top = Some(jfn_platform_abi::web_top(decorations, fullscreen, present));
+            (fullscreen, st.set_web_top(web_top))
+        };
+        Self::published(rt, fullscreen, changed)
+    }
+
+    fn published(
+        rt: &'static WlRuntime,
+        fullscreen: bool,
+        changed: bool,
+    ) -> Result<(), Unrepresentable> {
+        let placed = if rt.try_core().is_some() {
+            wl_ops::on_configure(rt, fullscreen)
+        } else {
+            Ok(())
+        };
         jfn_platform_abi::notify_window_changed();
+        if changed && let Some(menu) = rt.menu() {
+            menu.window_changed();
+        }
+        placed
     }
 
     /// The compositor's `wp_fractional_scale_v1.preferred_scale`: the
@@ -314,7 +441,7 @@ mod tests {
         let Some(scale) = resolved else {
             return;
         };
-        assert!(WindowExtent::build(logical, scale, WindowMode::Floating, 1).is_some());
+        assert!(WindowExtent::build(logical, scale, WindowMode::Floating, 1).is_ok());
     }
 
     #[test]

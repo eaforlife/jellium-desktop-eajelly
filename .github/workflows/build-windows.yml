@@ -85,6 +85,7 @@ jobs:
             ${{ matrix.pkg_prefix }}-vulkan-loader
             ${{ matrix.pkg_prefix }}-shaderc
             ${{ matrix.pkg_prefix }}-spirv-cross
+            ${{ matrix.pkg_prefix }}-luajit
             ${{ matrix.pkg_prefix }}-llvm
             ${{ matrix.pkg_prefix }}-tools
           )
@@ -150,7 +151,7 @@ jobs:
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvarsall.bat" %MATRIX_ARCH% || exit /b 1
-          set "PATH=%PATH%;%MSYS_BIN%"
+          set "PATH=%MSYS_BIN%;%PATH%"
           cargo xtask package --external-mpv "%CD%\third_party\mpv-install" --prefix build/install --dist dist
 
       - name: Build Windows installer

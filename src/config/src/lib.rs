@@ -1,13 +1,7 @@
-//! Settings store. Owns the in-memory state, JSON persistence, and the
-//! singleton accessor that the rest of the workspace calls into.
-//!
-//! On-disk schema is [`SettingsFile`]. Missing, unknown, and malformed keys
-//! keep their defaults on load; save suppresses fields that are at their
-//! default (empty strings, sentinel values, zero geometry) so existing config
-//! files round-trip unchanged.
-
 use jfn_mailbox::Mailbox;
-use jfn_platform_abi::WindowDecorations;
+use jfn_platform_abi::{
+    LogicalSize, PhysicalSize, ScreenName, WindowDecorations, WindowPlacement, WindowPos,
+};
 use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -23,29 +17,12 @@ pub use hardware_decode::{HWDEC_DEFAULT, Hwdec, UnknownHwdec, hwdec_options};
 const DEVICE_NAME_MAX: usize = 64;
 pub const PUBLIC_SERVER_URL: &str = "https://eajelly.xyz";
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct JfnWindowGeometry {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
-    pub logical_width: i32,
-    pub logical_height: i32,
+    pub logical: Option<LogicalSize>,
+    pub physical: Option<PhysicalSize>,
+    pub placement: Option<WindowPlacement>,
     pub maximized: bool,
-}
-
-impl Default for JfnWindowGeometry {
-    fn default() -> Self {
-        Self {
-            x: -1,
-            y: -1,
-            width: 0,
-            height: 0,
-            logical_width: 0,
-            logical_height: 0,
-            maximized: false,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -110,6 +87,9 @@ struct SettingsFile {
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     window_y: Option<i32>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    window_screen: Option<String>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     window_maximized: Option<bool>,
@@ -246,23 +226,40 @@ impl SettingsData {
             truncate_device_name(&mut v);
             self.device_name = v;
         }
-        if let Some(v) = file.window_width {
-            self.window.width = v;
+        match (file.window_width, file.window_height) {
+            (None, None) => {}
+            (Some(w), Some(h)) if w > 0 && h > 0 => {
+                self.window.physical = Some(PhysicalSize { w, h });
+            }
+            _ => {
+                eprintln!("[config] windowWidth/windowHeight ignored");
+                self.window.physical = None;
+            }
         }
-        if let Some(v) = file.window_height {
-            self.window.height = v;
+        match (file.window_logical_width, file.window_logical_height) {
+            (None, None) => {}
+            (Some(w), Some(h)) if w > 0 && h > 0 => {
+                self.window.logical = Some(LogicalSize { w, h });
+            }
+            _ => {
+                eprintln!("[config] windowLogicalWidth/windowLogicalHeight ignored");
+                self.window.logical = None;
+            }
         }
-        if let Some(v) = file.window_logical_width {
-            self.window.logical_width = v;
-        }
-        if let Some(v) = file.window_logical_height {
-            self.window.logical_height = v;
-        }
-        if let Some(v) = file.window_x {
-            self.window.x = v;
-        }
-        if let Some(v) = file.window_y {
-            self.window.y = v;
+        let screen = file.window_screen.and_then(ScreenName::new);
+        match (file.window_x, file.window_y) {
+            (None, None) => {
+                if screen.is_some() {
+                    eprintln!("[config] windowScreen ignored: no windowX/windowY is saved");
+                }
+            }
+            (Some(x), Some(y)) => {
+                self.window.placement = Some(WindowPlacement::new(screen, WindowPos { x, y }));
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                eprintln!("[config] windowX/windowY ignored: only one is saved");
+                self.window.placement = None;
+            }
         }
         if let Some(v) = file.window_maximized {
             self.window.maximized = v;
@@ -288,17 +285,20 @@ impl SettingsData {
     }
 
     fn to_file(&self) -> SettingsFile {
-        let size = self.window.width > 0 && self.window.height > 0;
-        let logical = self.window.logical_width > 0 && self.window.logical_height > 0;
-        let position = self.window.x >= 0 && self.window.y >= 0;
         SettingsFile {
             server_url: Some(self.server_url.clone()),
-            window_width: size.then_some(self.window.width),
-            window_height: size.then_some(self.window.height),
-            window_logical_width: logical.then_some(self.window.logical_width),
-            window_logical_height: logical.then_some(self.window.logical_height),
-            window_x: position.then_some(self.window.x),
-            window_y: position.then_some(self.window.y),
+            window_width: self.window.physical.map(|s| s.w),
+            window_height: self.window.physical.map(|s| s.h),
+            window_logical_width: self.window.logical.map(|s| s.w),
+            window_logical_height: self.window.logical.map(|s| s.h),
+            window_x: self.window.placement.as_ref().map(|p| p.position().x),
+            window_y: self.window.placement.as_ref().map(|p| p.position().y),
+            window_screen: self
+                .window
+                .placement
+                .as_ref()
+                .and_then(WindowPlacement::screen)
+                .map(|s| s.as_str().to_owned()),
             window_maximized: Some(self.window.maximized),
             hwdec: (self.hwdec != Hwdec::default()).then_some(self.hwdec),
             audio_passthrough: (!self.audio_passthrough.is_empty())
@@ -608,7 +608,7 @@ pub fn titlebar_theme_color() -> bool {
 bool_accessors!(hide_scrollbar, set_hide_scrollbar, hide_scrollbar);
 
 pub fn window_geometry() -> JfnWindowGeometry {
-    state().lock().data.window
+    state().lock().data.window.clone()
 }
 
 pub fn set_window_geometry(g: JfnWindowGeometry) {
@@ -650,7 +650,8 @@ fn normalize_device_name(raw: &str, platform_default: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        SettingsData, SettingsFile, WindowDecorations, default_device_name, normalize_device_name,
+        LogicalSize, PhysicalSize, ScreenName, SettingsData, SettingsFile, WindowDecorations,
+        WindowPlacement, WindowPos, default_device_name, normalize_device_name,
     };
 
     const PLATFORM: &str = "platform-host";
@@ -711,12 +712,12 @@ mod tests {
             log_level: "debug".into(),
             device_name: "box".into(),
             window: super::JfnWindowGeometry {
-                x: 1,
-                y: 2,
-                width: 3,
-                height: 4,
-                logical_width: 5,
-                logical_height: 6,
+                logical: Some(LogicalSize { w: 5, h: 6 }),
+                physical: Some(PhysicalSize { w: 3, h: 4 }),
+                placement: Some(WindowPlacement::new(
+                    ScreenName::new("DISPLAY2".into()),
+                    WindowPos { x: 1, y: 2 },
+                )),
                 maximized: true,
             },
             audio_exclusive: true,
@@ -737,6 +738,7 @@ mod tests {
                 "windowLogicalHeight",
                 "windowX",
                 "windowY",
+                "windowScreen",
                 "windowMaximized",
                 "hwdec",
                 "audioPassthrough",
@@ -760,7 +762,7 @@ mod tests {
         assert_eq!(data.server_url, "http://host");
         assert!(data.transparent_titlebar);
         assert!(data.hide_scrollbar);
-        assert_eq!(data.window.x, -1);
+        assert_eq!(data.window.placement, None);
     }
 
     #[cfg(target_os = "windows")]
@@ -788,10 +790,98 @@ mod tests {
 
     #[test]
     fn wrong_typed_key_is_ignored_and_rest_of_file_loads() {
-        let data = loaded(r#"{"windowWidth":"wide","serverUrl":"http://host","hideScrollbar":7}"#);
-        assert_eq!(data.window.width, 0);
+        let data = loaded(concat!(
+            r#"{"windowWidth":"wide","windowHeight":900,"#,
+            r#""serverUrl":"http://host","hideScrollbar":7}"#,
+        ));
+        assert_eq!(data.window.physical, None);
         assert!(data.hide_scrollbar);
         assert_eq!(data.server_url, "http://host");
+    }
+
+    #[test]
+    fn window_sizes_load_only_with_both_axes_positive() {
+        let data = loaded(concat!(
+            r#"{"windowWidth":1600,"windowHeight":900,"#,
+            r#""windowLogicalWidth":1280,"windowLogicalHeight":720}"#,
+        ));
+        assert_eq!(data.window.physical, Some(PhysicalSize { w: 1600, h: 900 }));
+        assert_eq!(data.window.logical, Some(LogicalSize { w: 1280, h: 720 }));
+
+        for json in [
+            r#"{"windowWidth":1600,"windowLogicalWidth":1280}"#,
+            concat!(
+                r#"{"windowWidth":0,"windowHeight":900,"#,
+                r#""windowLogicalWidth":1280,"windowLogicalHeight":0}"#,
+            ),
+            concat!(
+                r#"{"windowWidth":-1600,"windowHeight":900,"#,
+                r#""windowLogicalWidth":1280,"windowLogicalHeight":-720}"#,
+            ),
+        ] {
+            let data = loaded(json);
+            assert_eq!(data.window.physical, None, "{json}");
+            assert_eq!(data.window.logical, None, "{json}");
+            let text = serde_json::to_string(&data.to_file()).expect("serializes");
+            assert!(!text.contains("windowWidth"), "{json}");
+            assert!(!text.contains("windowLogicalWidth"), "{json}");
+        }
+    }
+
+    #[test]
+    fn a_negative_window_position_round_trips() {
+        let data = loaded(r#"{"windowX":-1920,"windowY":-40}"#);
+        assert_eq!(
+            data.window.placement,
+            Some(WindowPlacement::new(None, WindowPos { x: -1920, y: -40 }))
+        );
+        let text = serde_json::to_string(&data.to_file()).expect("serializes");
+        assert!(text.contains(r#""windowX":-1920,"windowY":-40"#));
+        assert!(!text.contains("windowScreen"));
+    }
+
+    #[test]
+    fn a_window_screen_round_trips_with_its_position() {
+        let data = loaded(r#"{"windowX":100,"windowY":50,"windowScreen":"\\\\.\\DISPLAY2"}"#);
+        let expected = Some(WindowPlacement::new(
+            ScreenName::new(r"\\.\DISPLAY2".into()),
+            WindowPos { x: 100, y: 50 },
+        ));
+        assert_eq!(data.window.placement, expected);
+        let text = serde_json::to_string(&data.to_file()).expect("serializes");
+        assert!(text.contains(r#""windowX":100,"windowY":50,"windowScreen":"\\\\.\\DISPLAY2""#));
+        assert_eq!(loaded(&text).window.placement, expected);
+    }
+
+    #[test]
+    fn an_absent_or_empty_window_screen_names_the_primary() {
+        for json in [
+            r#"{"windowX":100,"windowY":50}"#,
+            r#"{"windowX":100,"windowY":50,"windowScreen":""}"#,
+            r#"{"windowX":100,"windowY":50,"windowScreen":7}"#,
+        ] {
+            let data = loaded(json);
+            assert_eq!(
+                data.window.placement,
+                Some(WindowPlacement::new(None, WindowPos { x: 100, y: 50 })),
+                "{json}"
+            );
+            let text = serde_json::to_string(&data.to_file()).expect("serializes");
+            assert!(!text.contains("windowScreen"), "{json}");
+        }
+    }
+
+    #[test]
+    fn a_window_screen_without_a_position_is_ignored() {
+        for json in [
+            r#"{"windowScreen":"DISPLAY2"}"#,
+            r#"{"windowX":100,"windowScreen":"DISPLAY2"}"#,
+        ] {
+            let data = loaded(json);
+            assert_eq!(data.window.placement, None, "{json}");
+            let text = serde_json::to_string(&data.to_file()).expect("serializes");
+            assert!(!text.contains("windowScreen"), "{json}");
+        }
     }
 
     #[test]

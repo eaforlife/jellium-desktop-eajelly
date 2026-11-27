@@ -20,6 +20,7 @@ mod resource;
 mod runtime;
 mod server_probe;
 mod state;
+mod ui_task;
 mod updater;
 mod v8_handler;
 pub mod version;

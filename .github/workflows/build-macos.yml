@@ -2,16 +2,16 @@ name: build-macos
 
 on:
   workflow_dispatch:
+  pull_request:
   push:
+    branches:
+      - main
     tags:
-      - 'v*.*.*-eajelly*'
+      - 'v*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
-permissions:
-  contents: write
 
 jobs:
   build:
@@ -33,7 +33,7 @@ jobs:
 
       - name: Determine version
         id: version
-        run: echo "version=$(cargo xtask version)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(cargo run --quiet --manifest-path src/xtask/Cargo.toml -- version)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: |
@@ -48,19 +48,46 @@ jobs:
             molten-vk \
             sdl3 \
             libunibreak \
-            zimg
+            zimg \
+            shaderc
+
+      # Homebrew publishes no x86_64-macOS bottle for libplacebo >= 7.387.0
+      # (mpv's minimum), so the Intel runner builds it from source. Same tag
+      # as the Flatpak manifest and build-macos-legacy.yml. brew's libplacebo
+      # stays installed for ffmpeg; PKG_CONFIG_PATH makes mpv's meson pick
+      # this one and the bundler ships both dylibs.
+      - name: Cache built libplacebo (x86_64)
+        if: matrix.arch == 'x86_64'
+        id: deps-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/jellyfin-deps
+          key: deps-x86_64-libplacebo-v7.387.0-${{ matrix.runner }}-v1
+
+      - name: Build libplacebo from source (x86_64)
+        if: matrix.arch == 'x86_64' && steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --recursive --branch v7.387.0 https://code.videolan.org/videolan/libplacebo.git /tmp/libplacebo-src
+          meson setup /tmp/libplacebo-src/build /tmp/libplacebo-src \
+            --prefix="$HOME/jellyfin-deps" --buildtype=release \
+            -Ddemos=false -Dtests=false -Dvulkan=enabled
+          meson install -C /tmp/libplacebo-src/build --strip
 
       - uses: ./.github/actions/setup-cef
         with:
           platform: ${{ github.workflow }}-${{ matrix.arch }}
 
       - name: Build app bundle
-        run: cargo xtask install --prefix build/output
+        run: |
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            export PKG_CONFIG_PATH="$HOME/jellyfin-deps/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          fi
+          cargo xtask install --prefix build/output
 
       - name: Create DMG
         run: |
           brew install create-dmg
-          APP_NAME="Jellium Desktop - EAJelly"
+          APP_NAME="Jellium Desktop"
           VERSION="${{ steps.version.outputs.version }}"
           ARCH="${{ matrix.arch }}"
           DMG_NAME="JelliumDesktop-${VERSION}-macos-${ARCH}.dmg"
@@ -68,7 +95,7 @@ jobs:
 
           # create-dmg returns non-zero if icon positioning fails (no icon), ignore that
           create-dmg \
-            --volname "Jellium Desktop - EAJelly v${VERSION}" \
+            --volname "Jellium Desktop v${VERSION}" \
             --no-internet-enable \
             --window-size 500 300 \
             --icon-size 100 \
@@ -89,10 +116,3 @@ jobs:
         with:
           name: macos-${{ matrix.arch }}
           path: dist/JelliumDesktop-*.dmg
-
-      - name: Add DMG to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: dist/JelliumDesktop-*.dmg

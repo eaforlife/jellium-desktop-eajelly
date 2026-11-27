@@ -1,18 +1,10 @@
-//! The process's one web overlay: jellyfin-web's browser, the platform
-//! surface it paints into, and the size it is driven at.
-//!
-//! It owns its surface and its browser handle; every caller that drives it
-//! holds a [`WebOverlay`] clone. Its size is a pure function of the window
-//! snapshot and the strip the shell overlay publishes, and the browser is
-//! created as soon as that function yields one.
-
 pub mod size;
 
 use std::ffi::c_int;
 use std::sync::{Arc, OnceLock, Weak};
 
 use cef::rc::Rc;
-use cef::{ImplTask, Task, ThreadId, WrapTask, post_task, wrap_task};
+use cef::{ImplTask, Task, ThreadId, WrapTask, wrap_task};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
@@ -22,7 +14,7 @@ use jfn_platform_abi::Visibility;
 use crate::client::{DeferredNavigation, Inner, post_close_and_wait, post_set_hidden};
 use crate::frame_rate::FrameRate;
 use crate::paint_scheduler::PaintMode;
-use jfn_platform_abi::{PaintFrame, Presented, SurfaceSize, WindowTarget};
+use jfn_platform_abi::{PaintFrame, Presented, SurfaceSize, WindowStateError, WindowTarget};
 use size::view_size;
 
 pub struct WebOverlayConfig {
@@ -36,7 +28,6 @@ struct Overlay {
     application_menu: Mutex<Option<crate::ApplicationMenu>>,
     session: Arc<crate::runtime::Session>,
     platform: Mutex<Option<jfn_platform_abi::PlatformLease>>,
-    subscription: Mutex<Option<jfn_input::ShellStateSubscription>>,
     close: Mutex<()>,
     window_subscription: Mutex<Option<jfn_platform_abi::WindowSubscription>>,
     /// CEF is the sole strong authority after a creation request is accepted.
@@ -69,31 +60,46 @@ pub enum CloseDeliveryError {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("the session already owns a web overlay")]
-pub struct OverlayStartError;
+pub enum OverlayStartError {
+    #[error("the session already owns a web overlay")]
+    AlreadyOwned,
+    #[error("web overlay first sync: {0}")]
+    Sync(#[from] crate::ui_task::UiTaskRejected),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SyncError {
+    #[error("window state: {0}")]
+    WindowState(#[from] WindowStateError),
+    #[error("size: {0}")]
+    Size(#[from] jfn_platform_abi::ExtentError),
+    #[error("stacking: {0}")]
+    Stack(#[from] jfn_platform_abi::StackError),
+    #[error("a browser client is already installed")]
+    ClientInstalled,
+    #[error("CreateBrowser failed")]
+    Create,
+    #[error("view resize: {0}")]
+    Resize(#[from] crate::ui_task::UiTaskRejected),
+}
 
 /// The started overlay registry does not prolong either the overlay or its
 /// CEF-owned client.
 static STARTED: Mutex<Weak<Overlay>> = Mutex::new(Weak::new());
 
 impl WebOverlay {
-    /// Allocates the platform surface, installs the jfn-input web sink and
-    /// jellyfin-web's message handlers, subscribes to the window snapshot and
-    /// to [`jfn_input::on_shell_state_scoped`], and creates the browser as soon as
-    /// both yield a size with a positive width and height.
     pub fn start(
         runtime: &crate::InitializedCef,
         config: WebOverlayConfig,
     ) -> Result<WebOverlay, OverlayStartError> {
         if !runtime.session.register_overlay() {
-            return Err(OverlayStartError);
+            return Err(OverlayStartError::AlreadyOwned);
         }
         let overlay = WebOverlay {
             inner: Arc::new(Overlay {
                 application_menu: Mutex::new(Some(config.application_menu)),
                 session: Arc::clone(&runtime.session),
                 platform: Mutex::new(Some(runtime.platform_lease())),
-                subscription: Mutex::new(None),
                 close: Mutex::new(()),
                 window_subscription: Mutex::new(None),
                 client: OnceLock::new(),
@@ -113,17 +119,8 @@ impl WebOverlay {
         *STARTED.lock() = Arc::downgrade(&overlay.inner);
         *overlay.inner.window_subscription.lock() =
             Some(jfn_platform_abi::subscribe_window_changed(sync_started));
-        let subscription = jfn_input::on_shell_state_scoped(Box::new({
-            let weak = Arc::downgrade(&overlay.inner);
-            move |_| {
-                if let Some(inner) = weak.upgrade() {
-                    WebOverlay { inner }.sync();
-                }
-            }
-        }));
-        *overlay.inner.subscription.lock() = Some(subscription);
 
-        overlay.sync();
+        overlay.sync()?;
         Ok(overlay)
     }
 
@@ -131,54 +128,52 @@ impl WebOverlay {
         self.inner.client.get().and_then(Weak::upgrade)
     }
 
-    /// Posts [`WebOverlay::sync_on_ui`] onto TID_UI. Its callers include the
-    /// window-snapshot listener, which the compositor's own dispatch loop runs
-    /// inline.
-    fn sync(&self) {
-        self.inner.session.dispatch(|| {
-            let mut task = SyncTask::new(self.clone());
-            let _ = post_task(ThreadId::UI, Some(&mut task));
-        });
+    fn sync(&self) -> Result<(), crate::ui_task::UiTaskRejected> {
+        self.inner
+            .session
+            .dispatch(|| crate::ui_task::post_ui(&mut SyncTask::new(self.clone())))
+            .unwrap_or(Ok(()))
     }
 
     /// Re-derives the size, creates the browser at the first size, and shows
     /// the surface — on TID_UI, so every acknowledgement it awaits is delivered
     /// by a thread that is not this one.
-    fn sync_on_ui(&self) {
+    fn sync_on_ui(&self) -> Result<(), SyncError> {
         if !self.inner.session.is_active() {
-            return;
+            return Ok(());
         }
-        let Some(state) = jfn_input::shell_state() else {
-            return;
-        };
         let Some(platform) = self.inner.platform.lock().clone() else {
-            return;
+            return Ok(());
         };
-        let snapshot = platform.platform().window_owner().source().snapshot();
-        let Some(size) = view_size(&snapshot, state.reserved_strip) else {
-            return;
+        let window = match platform.platform().window_owner().source().window_state() {
+            Ok(window) => window,
+            Err(WindowStateError::NoWindow | WindowStateError::WebOffsetUnstated) => return Ok(()),
+            Err(e) => return Err(e.into()),
         };
-        self.ensure_browser(size);
+        let Some(size) = view_size(&window)? else {
+            return Ok(());
+        };
+        self.ensure_browser(size)
     }
 
     /// Create the browser once, with the view already sized: CEF reads the view
     /// rect during creation, and a zero-sized one aborts Chromium on the first
     /// navigation.
-    fn ensure_browser(&self, size: SurfaceSize) {
+    fn ensure_browser(&self, size: SurfaceSize) -> Result<(), SyncError> {
         if self.inner.client.get().is_some() {
             if let Some(client) = self.client() {
-                client.apply_view_size(size);
+                client.apply_view_size(size)?;
             }
-            return;
+            return Ok(());
         }
 
         let Some(platform) = self.inner.platform.lock().clone() else {
-            return;
+            return Ok(());
         };
         let Some(application_menu) = self.inner.application_menu.lock().clone() else {
-            return;
+            return Ok(());
         };
-        let surface = WebOverlaySurface::allocate(platform);
+        let surface = WebOverlaySurface::allocate(platform)?;
         let client = Inner::new(
             Arc::clone(&self.inner.session),
             surface,
@@ -187,43 +182,56 @@ impl WebOverlay {
             self.inner.frame_rate.load(),
         );
         client.set_name("web");
-        client.apply_view_size(size);
+        client.apply_view_size(size)?;
         crate::business_web::install(&client, application_menu);
-        let _ = self.inner.client.set(Arc::downgrade(&client));
+        self.inner
+            .client
+            .set(Arc::downgrade(&client))
+            .map_err(|_| SyncError::ClientInstalled)?;
         jfn_logging::log(
             jfn_logging::Category::Cef,
             jfn_logging::Level::Info,
             &format!(
-                "CreateBrowser(web) logical={}x{}+{} physical={}x{}+{} scale={}",
+                "CreateBrowser(web) logical={}x{} physical={}x{} scale={}",
                 size.extent.logical().w,
                 size.extent.logical().h,
-                size.logical_top,
                 size.extent.physical().w,
                 size.extent.physical().h,
-                size.physical_top,
                 size.extent.scale(),
             ),
         );
-        if client.create("") {
-            let _ = client.surface().set_visibility(Visibility::Shown);
+        if !client.create("") {
+            return Err(SyncError::Create);
         }
+        client.surface().set_visibility(Visibility::Shown);
+        Ok(())
     }
 
     /// Thread-agnostic; posts a TID_UI task.
-    pub fn set_refresh_rate(&self, rate: RefreshRate) {
-        self.inner.session.dispatch(|| {
-            let mut task = SetRefreshTask::new(Arc::downgrade(&self.inner), FrameRate::from(rate));
-            let _ = post_task(ThreadId::UI, Some(&mut task));
-        });
+    pub fn set_refresh_rate(
+        &self,
+        rate: RefreshRate,
+    ) -> Result<(), crate::ui_task::UiTaskRejected> {
+        self.inner
+            .session
+            .dispatch(|| {
+                crate::ui_task::post_ui(&mut SetRefreshTask::new(
+                    Arc::downgrade(&self.inner),
+                    FrameRate::from(rate),
+                ))
+            })
+            .unwrap_or(Ok(()))
     }
 
     /// Thread-agnostic; posts a TID_UI task that calls `WasHidden(hidden)`.
-    pub fn set_hidden(&self, hidden: bool) {
-        self.inner.session.dispatch(|| {
-            if let Some(client) = self.client() {
-                post_set_hidden(client, hidden);
-            }
-        });
+    pub fn set_hidden(&self, hidden: bool) -> Result<(), crate::ui_task::UiTaskRejected> {
+        self.inner
+            .session
+            .dispatch(|| {
+                self.client()
+                    .map_or(Ok(()), |client| post_set_hidden(client, hidden))
+            })
+            .unwrap_or(Ok(()))
     }
 
     /// No-op where the platform does not drive frames itself.
@@ -328,12 +336,11 @@ impl WebOverlay {
         drain_and_release(&self.inner.session, &self.inner.platform, || {
             crate::ready::stop();
             self.inner.window_subscription.lock().take();
-            self.inner.subscription.lock().take();
             // This barrier runs after every accepted UI task, including browser
             // creation. Looking up the client before it would miss queued creation.
             let (tx, rx) = std::sync::mpsc::channel();
             let mut task = DrainBarrierTask::new(self.clone(), Arc::new(Mutex::new(Some(tx))));
-            if post_task(ThreadId::UI, Some(&mut task)) != 1 {
+            if crate::ui_task::post_ui(&mut task).is_err() {
                 return Err(CloseDeliveryError::PostRejected);
             }
             drop(task);
@@ -385,14 +392,19 @@ impl WebOverlaySurface {
     pub(crate) fn platform(&self) -> &dyn jfn_platform_abi::Platform {
         self.platform.platform()
     }
-    pub(crate) fn allocate(platform: jfn_platform_abi::PlatformLease) -> Arc<WebOverlaySurface> {
+    pub(crate) fn allocate(
+        platform: jfn_platform_abi::PlatformLease,
+    ) -> Result<Arc<WebOverlaySurface>, jfn_platform_abi::StackError> {
         let surface = Arc::new(Self {
-            handle: platform.platform().alloc_surface(Visibility::Hidden),
+            handle: platform.platform().alloc_surface(
+                Visibility::Hidden,
+                jfn_platform_abi::SurfacePlacement::BelowTitlebar,
+            ),
             platform,
         });
         let stacker: Arc<dyn jfn_platform_abi::stack::WebOverlayStacker> = surface.clone();
-        jfn_platform_abi::stack::install_web_overlay_stacker(Arc::downgrade(&stacker));
-        surface
+        jfn_platform_abi::stack::install_web_overlay_stacker(Arc::downgrade(&stacker))?;
+        Ok(surface)
     }
 
     pub(crate) fn set_visibility(&self, visibility: Visibility) -> Visibility {
@@ -447,20 +459,26 @@ impl jfn_platform_abi::stack::WebOverlayStacker for WebOverlaySurface {
         &self,
         lower: &[jfn_platform_abi::SurfaceHandle],
         upper: &[jfn_platform_abi::SurfaceHandle],
-    ) {
+    ) -> Result<(), jfn_platform_abi::StackError> {
         let mut ordered = Vec::with_capacity(lower.len() + upper.len() + 1);
         ordered.extend_from_slice(lower);
         if !self.handle.is_none() {
             ordered.push(self.handle);
         }
         ordered.extend_from_slice(upper);
-        self.platform.platform().apply_stack(&ordered);
+        self.platform.platform().apply_stack(&ordered)
     }
 }
 
 impl Drop for WebOverlaySurface {
     fn drop(&mut self) {
-        jfn_platform_abi::stack::remove_web_overlay_stacker();
+        if let Err(e) = jfn_platform_abi::stack::remove_web_overlay_stacker() {
+            jfn_logging::log(
+                jfn_logging::Category::Cef,
+                jfn_logging::Level::Error,
+                &format!("web overlay unstacking: {e}"),
+            );
+        }
         if !self.handle.is_none() {
             self.platform.platform().free_surface(self.handle);
         }
@@ -481,12 +499,15 @@ pub(crate) fn with_current_client<R>(f: impl FnOnce(&Inner) -> R) -> Option<R> {
         .flatten()
 }
 
-/// Subscribed into the window snapshot at [`WebOverlay::start`]; posts the
-/// overlay's sync and returns, so the thread that publishes the change waits
-/// for nothing.
 fn sync_started() {
-    if let Some(inner) = STARTED.lock().upgrade() {
-        WebOverlay { inner }.sync();
+    if let Some(inner) = STARTED.lock().upgrade()
+        && let Err(e) = (WebOverlay { inner }).sync()
+    {
+        jfn_logging::log(
+            jfn_logging::Category::Cef,
+            jfn_logging::Level::Error,
+            &format!("web overlay sync: {e}"),
+        );
     }
 }
 
@@ -552,7 +573,13 @@ wrap_task! {
     }
     impl Task {
         fn execute(&self) {
-            self.overlay.sync_on_ui();
+            if let Err(e) = self.overlay.sync_on_ui() {
+                jfn_logging::log(
+                    jfn_logging::Category::Cef,
+                    jfn_logging::Level::Error,
+                    &format!("web overlay: {e}"),
+                );
+            }
         }
     }
 }
@@ -569,8 +596,14 @@ wrap_task! {
             };
             if !overlay.session.is_active() { return; }
             overlay.frame_rate.store(Some(self.frame_rate));
-            if let Some(client) = overlay.client.get().and_then(Weak::upgrade) {
-                client.set_refresh_rate(self.frame_rate);
+            if let Some(client) = overlay.client.get().and_then(Weak::upgrade)
+                && let Err(e) = client.set_refresh_rate(self.frame_rate)
+            {
+                jfn_logging::log(
+                    jfn_logging::Category::Cef,
+                    jfn_logging::Level::Error,
+                    &format!("refresh rate: {e}"),
+                );
             }
         }
     }

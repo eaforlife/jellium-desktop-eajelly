@@ -13,7 +13,9 @@ use jfn_cef::{APP_VERSION_FULL, BrowserCef, InitializedCef, LoadedCef, ProcessDi
 use jfn_instance_ipc::jfn::{Request, Response};
 use jfn_instance_ipc::{Listener, Start, Stream};
 use jfn_logging::{Category, Level};
-use jfn_platform_abi::{IdleInhibitLevel, Instance, Platform, WindowGeometry};
+use jfn_platform_abi::{
+    IdleInhibitLevel, Instance, MpvScreen, Platform, WindowGeometry, WindowStateError,
+};
 
 use crate::cli;
 
@@ -42,6 +44,7 @@ const STARTUP_BG_HEX: &str = "#101010";
 
 enum BackgroundCapture {
     Pending,
+    Applying { user_video_bg: u32 },
     Applied { user_video_bg: u32 },
 }
 
@@ -57,11 +60,17 @@ enum BootError {
     Canceled,
     #[error("mpv terminated before its window became ready")]
     MpvTerminated,
+    #[error("mpv event during startup: {0}")]
+    Ingest(#[from] jfn_playback::ingest_driver::IngestError),
 }
 
 impl BootError {
     fn exit_code(&self) -> c_int {
-        if matches!(self, Self::Canceled) { 0 } else { 1 }
+        if matches!(self, Self::Canceled) {
+            EXIT_SUCCESS
+        } else {
+            EXIT_FAILURE
+        }
     }
 }
 
@@ -71,6 +80,9 @@ struct CefInit {
     /// Whether CEF composites through shared textures.
     shared_textures: bool,
 }
+
+const EXIT_SUCCESS: c_int = 0;
+const EXIT_FAILURE: c_int = 1;
 
 pub(crate) const DEFAULT_LOG_FILTER: &str = "info";
 
@@ -150,7 +162,7 @@ fn wake_mpv_on_window_change() -> jfn_platform_abi::WindowSubscription {
     jfn_platform_abi::subscribe_window_changed(jfn_mpv::api::jfn_mpv_wakeup)
 }
 
-fn setup_mpv_environment() {
+fn setup_mpv_environment() -> Result<(), jfn_platform_abi::PlatformInitError> {
     let mpv_home = jfn_paths::mpv_home();
     unsafe {
         std::env::set_var("MPV_HOME", &mpv_home);
@@ -158,7 +170,7 @@ fn setup_mpv_environment() {
 
     plat()
         .mpv_host()
-        .prepare(jfn_config::configured_window_decorations());
+        .prepare(jfn_config::configured_window_decorations())
 }
 
 struct StartupOptions {
@@ -234,6 +246,7 @@ struct MpvInitOptions<'a> {
     backend_byte: u8,
     boot_geometry: Option<&'a str>,
     boot_force_position: bool,
+    boot_screen: Option<&'a MpvScreen>,
     boot_window_max: bool,
     embed_wid: Option<i64>,
     hwdec: jfn_config::Hwdec,
@@ -245,6 +258,11 @@ struct MpvInitOptions<'a> {
 
 fn init_mpv_handle(opts: MpvInitOptions<'_>) -> *mut jfn_mpv::sys::mpv_handle {
     let geometry_c = opts.boot_geometry.map(cs);
+    let screen = match opts.boot_screen {
+        Some(MpvScreen::Index(index)) => jfn_mpv::boot::BootScreen::Index(*index),
+        Some(MpvScreen::Name(name)) => jfn_mpv::boot::BootScreen::Name(name.as_str().to_owned()),
+        None => jfn_mpv::boot::BootScreen::Default,
+    };
     let hwdec_c = cs(opts.hwdec.as_str());
     let user_agent_c = cs(&format!("JelliumDesktop/{}", APP_VERSION_FULL));
     let passthrough_c = cs(opts.audio_passthrough);
@@ -268,6 +286,7 @@ fn init_mpv_handle(opts: MpvInitOptions<'_>) -> *mut jfn_mpv::sys::mpv_handle {
         geometry: geometry_c.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
         wid: opts.embed_wid.unwrap_or(0),
         force_window_position: opts.boot_force_position,
+        screen,
         window_maximized_at_boot: opts.boot_window_max,
         mpv_log_level: mpv_log_level_c.as_ptr(),
         client_side_decorations: jfn_config::client_side_decorations(),
@@ -288,9 +307,16 @@ fn wait_for_vo_window(mut boot: BackgroundCapture) -> Result<ReadyBoot, BootErro
             return Break(());
         }
         loop {
-            match consume_boot_event(&mut boot, jfn_mpv::api::wait_event_owned(0.0)) {
+            match consume_boot_event(
+                &mut boot,
+                jfn_mpv::api::wait_event_owned(jfn_mpv::api::NO_WAIT),
+            ) {
                 BootEvent::Idle => break,
                 BootEvent::Fatal => return Break(()),
+                BootEvent::Ingest(error) => {
+                    outcome = Err(error.into());
+                    return Break(());
+                }
                 BootEvent::Consumed => {}
             }
         }
@@ -298,13 +324,18 @@ fn wait_for_vo_window(mut boot: BackgroundCapture) -> Result<ReadyBoot, BootErro
             outcome = Ok(ready);
             return Break(());
         }
-        if wait == jfn_platform_abi::VoWait::Event
-            && matches!(
-                consume_boot_event(&mut boot, jfn_mpv::api::wait_event_owned(-1.0)),
-                BootEvent::Fatal
-            )
-        {
-            return Break(());
+        if wait == jfn_platform_abi::VoWait::Event {
+            match consume_boot_event(
+                &mut boot,
+                jfn_mpv::api::wait_event_owned(jfn_mpv::api::WAIT_FOREVER),
+            ) {
+                BootEvent::Fatal => return Break(()),
+                BootEvent::Ingest(error) => {
+                    outcome = Err(error.into());
+                    return Break(());
+                }
+                BootEvent::Idle | BootEvent::Consumed => {}
+            }
         }
         Continue(())
     });
@@ -437,12 +468,16 @@ fn initialize_playback_coordination() -> PlaybackCoordination {
 enum CleanupError {
     #[error("mpv termination unconfirmed: {0}")]
     Termination(String),
-    #[error("shell shutdown: {0:?}")]
-    Shell(crate::shell::ShutdownOutcome),
+    #[error(transparent)]
+    Shell(#[from] crate::shell::ShellShutdownError),
     #[error(transparent)]
     Cef(#[from] jfn_cef::ShutdownError),
     #[error(transparent)]
     Platform(#[from] jfn_platform_abi::PlatformBusy),
+    #[error(transparent)]
+    HostRelease(#[from] jfn_platform_abi::HostReleaseError),
+    #[error(transparent)]
+    Detach(#[from] jfn_platform_abi::DetachError),
 }
 #[derive(Debug)]
 struct CleanupErrors(Vec<CleanupError>);
@@ -514,50 +549,85 @@ struct InitializedNative {
     mpv: MpvRuntime,
 }
 trait NativePhase {
-    fn cleanup(self) -> Result<(), CleanupError>;
+    fn cleanup(self) -> Result<(), CleanupErrors>;
+}
+fn detached(error: jfn_platform_abi::DetachError, rest: Result<(), CleanupError>) -> CleanupErrors {
+    let mut failures = vec![CleanupError::from(error)];
+    failures.extend(rest.err());
+    CleanupErrors(failures)
+}
+fn post_window_failure(
+    failure: jfn_platform_abi::PostWindowError<jfn_platform_abi::BlockingError>,
+) -> CleanupError {
+    match failure {
+        jfn_platform_abi::PostWindowError::Termination { error, post_window } => {
+            let detail = error.to_string();
+            error.abandon();
+            post_window.abandon();
+            CleanupError::Termination(detail)
+        }
+        jfn_platform_abi::PostWindowError::HostRelease(error) => error.into(),
+    }
 }
 impl NativePhase for PreparedNative {
-    fn cleanup(self) -> Result<(), CleanupError> {
+    fn cleanup(self) -> Result<(), CleanupErrors> {
+        let failed = |failure| match failure {
+            jfn_platform_abi::PostWindowError::<std::convert::Infallible>::Termination {
+                error,
+                ..
+            } => match error {},
+            jfn_platform_abi::PostWindowError::HostRelease(error) => CleanupError::from(error),
+        };
         match self
             .prepared
             .cleanup(|| Ok::<(), std::convert::Infallible>(()))
         {
             Ok(()) => Ok(()),
-            Err((never, _)) => match never {},
+            Err(jfn_platform_abi::PreparedCleanupError::PostWindow(failure)) => {
+                Err(CleanupErrors(vec![failed(failure)]))
+            }
+            Err(jfn_platform_abi::PreparedCleanupError::Detach { error, rest }) => {
+                Err(detached(error, rest.map_err(failed)))
+            }
         }
     }
 }
 impl NativePhase for MpvNative {
-    fn cleanup(self) -> Result<(), CleanupError> {
+    fn cleanup(self) -> Result<(), CleanupErrors> {
         match self.prepared.cleanup(|| self.mpv.terminate()) {
             Ok(()) => Ok(()),
-            Err((error, post_window)) => {
-                let detail = error.to_string();
-                error.abandon();
-                post_window.abandon();
-                Err(CleanupError::Termination(detail))
+            Err(jfn_platform_abi::PreparedCleanupError::PostWindow(failure)) => {
+                Err(CleanupErrors(vec![post_window_failure(failure)]))
+            }
+            Err(jfn_platform_abi::PreparedCleanupError::Detach { error, rest }) => {
+                Err(detached(error, rest.map_err(post_window_failure)))
             }
         }
     }
 }
 impl NativePhase for InitializedNative {
-    fn cleanup(self) -> Result<(), CleanupError> {
+    fn cleanup(self) -> Result<(), CleanupErrors> {
         self.platform
             .platform()
             .set_idle_inhibit(IdleInhibitLevel::None);
-        match self.platform.cleanup(|| self.mpv.terminate()) {
-            Ok(()) => Ok(()),
+        let failure = match self.platform.cleanup(|| self.mpv.terminate()) {
+            Ok(()) => return Ok(()),
             Err(jfn_platform_abi::PlatformCleanupError::Busy { runtime, terminate }) => {
                 let _ = Box::leak(Box::new((runtime, terminate)));
-                Err(jfn_platform_abi::PlatformBusy.into())
+                jfn_platform_abi::PlatformBusy.into()
             }
             Err(jfn_platform_abi::PlatformCleanupError::Termination { error, post_window }) => {
-                let detail = error.to_string();
-                error.abandon();
-                post_window.abandon();
-                Err(CleanupError::Termination(detail))
+                post_window_failure(jfn_platform_abi::PostWindowError::Termination {
+                    error,
+                    post_window,
+                })
             }
-        }
+            Err(jfn_platform_abi::PlatformCleanupError::HostRelease(error)) => error.into(),
+            Err(jfn_platform_abi::PlatformCleanupError::Detach { error, rest }) => {
+                return Err(detached(error, rest.map_err(post_window_failure)));
+            }
+        };
+        Err(CleanupErrors(vec![failure]))
     }
 }
 struct NativeOwner<P: NativePhase>(Option<P>);
@@ -581,7 +651,7 @@ impl<P: NativePhase> NativeOwner<P> {
             .expect("native phase already consumed by teardown")
     }
 
-    fn cleanup(&mut self) -> Result<(), CleanupError> {
+    fn cleanup(&mut self) -> Result<(), CleanupErrors> {
         self.0.take().map_or(Ok(()), NativePhase::cleanup)
     }
 }
@@ -649,11 +719,10 @@ impl Services {
         let playback = self.playback.take().map(PlaybackCoordination::stop);
         jfn_config::settings_shutdown_save_worker();
         let mut failures = Vec::new();
-        if let Some(shell) = self.shell.take() {
-            let result = shell.shutdown();
-            if result != crate::shell::ShutdownOutcome::Terminated {
-                failures.push(CleanupError::Shell(result));
-            }
+        if let Some(shell) = self.shell.take()
+            && let Err(error) = shell.shutdown()
+        {
+            failures.push(error.into());
         }
         WEB_OVERLAY.lock().take();
         if let Some(mut cef) = self.cef.take()
@@ -682,8 +751,8 @@ impl Drop for Services {
 impl<P: NativePhase> StartupResources<P> {
     fn cleanup(&mut self) -> Result<(), CleanupErrors> {
         let mut failures = self.services.cleanup().err().map_or_else(Vec::new, |e| e.0);
-        if let Err(error) = self.native.cleanup() {
-            failures.push(error);
+        if let Err(errors) = self.native.cleanup() {
+            failures.extend(errors.0);
         }
         if failures.is_empty() {
             Ok(())
@@ -736,7 +805,9 @@ impl RunningRuntime {
             jfn_playback::jfn_shutdown_initiate();
         }
         plat().run_main_loop();
-        crate::window_geometry::controller().persist();
+        if let Err(e) = crate::window_geometry::controller().persist() {
+            tracing::error!(target: "Main", "window geometry not persisted: {e}; the saved geometry stands");
+        }
         jfn_config::settings_save();
         let manager = self
             .manager_thread
@@ -752,52 +823,71 @@ impl RunningRuntime {
         if let Err(error) = &cleanup {
             tracing::error!(target: "Main", "shutdown: {error}");
         }
-        i32::from(ingestion.is_err() || manager.is_err() || cleanup.is_err())
+        if ingestion.is_err() || manager.is_err() || cleanup.is_err() {
+            EXIT_FAILURE
+        } else {
+            EXIT_SUCCESS
+        }
     }
 }
 
-/// Boot-time mpv size reconcile (saved scale vs the scale the platform
-/// reports); seeds the display-hz cache and returns it for browser init.
-fn boot_mpv_reconcile() -> Option<jfn_gpu_paint::RefreshRate> {
+fn boot_display_hz() -> (f64, Option<jfn_gpu_paint::RefreshRate>) {
     jfn_playback::ingest_driver::jfn_playback_seed_display_hz_sync();
     let hz = jfn_playback::ingest_driver::jfn_playback_display_hz();
     let rate = jfn_gpu_paint::RefreshRate::from_hz(hz);
     if let Some(rate) = rate {
         jfn_gpu_paint::report_refresh(jfn_gpu_paint::RefreshSource::MpvDisplayFps, rate);
     }
+    (hz, rate)
+}
+
+#[derive(Debug, thiserror::Error)]
+enum MpvReconcileError {
+    #[error("window state: {0}")]
+    WindowState(#[from] WindowStateError),
+    #[error(transparent)]
+    Size(#[from] jfn_platform_abi::Unrepresentable),
+    #[error("clamp: {0}")]
+    Clamp(#[from] jfn_platform_abi::geometry::ClampError),
+}
+
+fn boot_mpv_reconcile(hz: f64) -> Result<(), MpvReconcileError> {
     let saved = jfn_config::window_geometry();
-    let snap = crate::window_geometry::controller().source().snapshot();
+    let window = crate::window_geometry::controller()
+        .source()
+        .window_state()?;
+    let scale = plat().scale()?;
     tracing::info!(target: "Main",
-        "[FLOW] scale={} fullscreen={} display-hz={hz}",
-        plat().scale(), snap.fullscreen
+        "[FLOW] scale={scale} fullscreen={} display-hz={hz}",
+        window.fullscreen
     );
 
     // Saved intent, not an observation: the OS may still be applying the
     // maximize, and a set_geometry landing mid-flight leaves mpv's stored
     // window size disagreeing with the visible window.
-    let locked = saved.maximized || snap.fullscreen || snap.maximized;
-    let reconciled = crate::window_geometry::saved_sizes(&saved).and_then(|(logical, physical)| {
-        plat()
-            .window_owner()
-            .reconcile_mpv_size(plat().scale(), logical, physical, locked)
-    });
-    if let Some(physical) = reconciled {
-        let clamped = plat().clamp_window_geometry(WindowGeometry {
-            w: physical.w,
-            h: physical.h,
-            position: None,
-        });
+    let locked = saved.maximized || window.fullscreen || window.maximized;
+    let Some((logical, physical)) = crate::window_geometry::saved_sizes(&saved) else {
+        return Ok(());
+    };
+    let reconciled = plat()
+        .window_owner()
+        .reconcile_mpv_size(scale, logical, physical, locked)?;
+    if let Some(resized) = reconciled {
+        let clamped = plat().clamp_window_geometry(&WindowGeometry {
+            w: resized.w,
+            h: resized.h,
+            placement: saved.placement,
+        })?;
         let (new_pw, new_ph) = (clamped.w, clamped.h);
         let geom_str = format!("{new_pw}x{new_ph}");
         tracing::info!(target: "Main",
-            "[FLOW] scale {}, saved {}x{} logical at {}x{} physical, resize to {}",
-            plat().scale(), saved.logical_width, saved.logical_height,
-            saved.width, saved.height, geom_str);
+            "[FLOW] scale {scale}, saved {}x{} logical at {}x{} physical, resize to {}",
+            logical.w, logical.h,
+            physical.w, physical.h, geom_str);
         let g_c = cs(&geom_str);
         unsafe { jfn_mpv::api::jfn_mpv_set_geometry(g_c.as_ptr()) };
     }
-
-    rate
+    Ok(())
 }
 
 fn start_web_overlay(
@@ -820,8 +910,6 @@ fn start_web_overlay(
     }
     jfn_color::theme::jfn_theme_color_set_video_bg(user_video_bg);
 
-    // The overlay creates its browser itself, at the first size the window
-    // snapshot and the shell overlay's reserved strip yield.
     let manager = crate::manager::jfn_manager_prepare()?;
     let overlay = jfn_cef::WebOverlay::start(
         &cef.runtime,
@@ -871,7 +959,7 @@ pub fn jfn_app_main() -> c_int {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("CEF startup: {error}");
-            return 1;
+            return EXIT_FAILURE;
         }
     };
     let cef_runtime = match cef_runtime.dispatch() {
@@ -886,7 +974,7 @@ pub fn jfn_app_main() -> c_int {
     let cli = cli::Cli::parse();
     if cli.version {
         print_version(&version);
-        return 0;
+        return EXIT_SUCCESS;
     }
     if let Some(path) = &cli.config_dir {
         jfn_paths::set_config_dir_override(path.into());
@@ -902,11 +990,15 @@ pub fn jfn_app_main() -> c_int {
     let opts = resolve_startup_options(&cli);
 
     init_logging(opts.log_file.as_deref(), &opts.log_level, &version);
+    #[cfg(target_os = "linux")]
+    for (var, value) in jfn_linux_util::mesa::apply_compression_workarounds(version.major) {
+        tracing::info!(target: "Main", "CEF {} on Linux: {var}={value}", version.major);
+    }
     let metadata = match application_metadata(version) {
         Ok(metadata) => metadata,
         Err(error) => {
             tracing::error!(target: "Main", "application metadata: {error}");
-            return 1;
+            return EXIT_FAILURE;
         }
     };
 
@@ -921,14 +1013,14 @@ pub fn jfn_app_main() -> c_int {
         Ok(instance) => instance,
         Err(e) => {
             tracing::error!(target: "Main", "establishing instance identity: {e}");
-            return 1;
+            return EXIT_FAILURE;
         }
     };
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
         Err(e) => {
             tracing::error!(target: "Main", "tokio runtime: {e}");
-            return 1;
+            return EXIT_FAILURE;
         }
     };
     // The accept loop lives on `runtime`'s workers while `run_app` blocks the
@@ -941,7 +1033,7 @@ pub fn jfn_app_main() -> c_int {
         Start::AlreadyRunning => runtime.block_on(notify_running(&instance)),
         Start::Failed(e) => {
             tracing::error!(target: "Main", "could not start instance IPC: {e}");
-            1
+            EXIT_FAILURE
         }
     }
 }
@@ -958,7 +1050,7 @@ async fn notify_running(instance: &Instance) -> c_int {
         Ok(None) => tracing::warn!(target: "Main", "existing instance closed without ack"),
         Err(e) => tracing::warn!(target: "Main", "could not signal existing instance: {e}"),
     }
-    0
+    EXIT_SUCCESS
 }
 
 fn run_app(
@@ -971,7 +1063,7 @@ fn run_app(
         Ok(prepared) => prepared,
         Err(error) => {
             tracing::error!(target: "Main", "{error}");
-            return 1;
+            return EXIT_FAILURE;
         }
     };
     let resources = StartupResources {
@@ -987,13 +1079,24 @@ fn run_app(
 
     // Boot geometry resolves before the host prepare so its display probes
     // hit the real server, not the mpv proxy the prepare may install.
-    let Some(boot) = crate::window_geometry::controller().boot() else {
-        tracing::error!(target: "Main", "boot geometry unrepresentable at the reported scale");
-        return 1;
+    let boot = match crate::window_geometry::controller().boot() {
+        Ok(boot) => boot,
+        Err(crate::window_geometry::BootGeometryError::Clamp { error, unclamped }) => {
+            tracing::error!(target: "Main",
+                "boot geometry: not clamped on-screen: {error}; the saved geometry stands");
+            unclamped
+        }
+        Err(e) => {
+            tracing::error!(target: "Main", "boot geometry: {e}");
+            return EXIT_FAILURE;
+        }
     };
     let mpv_boot = plat().window_owner().apply_boot_geometry(&boot);
 
-    setup_mpv_environment();
+    if let Err(error) = setup_mpv_environment() {
+        tracing::error!(target: "Main", "{error}");
+        return EXIT_FAILURE;
+    }
 
     // Hosts that own their toplevel create it here, before mpv init, so its
     // window ID can be handed to mpv as `wid`.
@@ -1011,6 +1114,7 @@ fn run_app(
         backend_byte,
         boot_geometry: mpv_boot.as_ref().map(|w| w.geometry.as_str()),
         boot_force_position: mpv_boot.as_ref().is_some_and(|w| w.force_position),
+        boot_screen: mpv_boot.as_ref().and_then(|w| w.screen.as_ref()),
         boot_window_max: mpv_boot.as_ref().is_some_and(|w| w.maximized),
         embed_wid: plat().mpv_host().embed_wid(),
         hwdec: opts.hwdec,
@@ -1021,7 +1125,7 @@ fn run_app(
     });
     let Some(mpv) = MpvRuntime::new(raw) else {
         tracing::error!(target: "Main", "mpv handle init failed");
-        return 1;
+        return EXIT_FAILURE;
     };
     let mut resources = resources.with_mpv(mpv);
     tracing::info!(target: "Main",
@@ -1029,7 +1133,7 @@ fn run_app(
 
     if !jfn_playback::ingest_driver::jfn_playback_observe_mpv_properties(backend_byte) {
         tracing::error!(target: "Main", "observe_mpv_properties failed");
-        return 1;
+        return EXIT_FAILURE;
     }
 
     // force-window=yes keeps VO creation on mpv's core thread. The user's
@@ -1053,7 +1157,7 @@ fn run_app(
         Ok(resources) => resources,
         Err(error) => {
             tracing::error!(target: "Main", "{error}");
-            return 1;
+            return EXIT_FAILURE;
         }
     };
     let platform = &resources.native.get().platform;
@@ -1068,7 +1172,7 @@ fn run_app(
             }
             Err(error) => {
                 tracing::error!(target: "Main", "shell overlay unavailable: {error}");
-                return 1;
+                return EXIT_FAILURE;
             }
         };
     // fontdb's directory walk must not run while Chromium is manipulating
@@ -1077,7 +1181,7 @@ fn run_app(
         && let Err(error) = fonts.join()
     {
         tracing::error!(target: "Main", "{error}");
-        return 1;
+        return EXIT_FAILURE;
     }
 
     // CEF's process bring-up needs nothing mpv owns; where the platform
@@ -1091,7 +1195,7 @@ fn run_app(
             }
             Err(error) => {
                 tracing::error!(target: "Main", "{error}");
-                return 1;
+                return EXIT_FAILURE;
             }
         }
     } else {
@@ -1101,7 +1205,11 @@ fn run_app(
         Ok(boot) => boot,
         Err(error) => {
             let code = error.exit_code();
-            tracing::info!(target: "Main", "{error}");
+            if code == EXIT_SUCCESS {
+                tracing::info!(target: "Main", "{error}");
+            } else {
+                tracing::error!(target: "Main", "{error}");
+            }
             return code;
         }
     };
@@ -1111,7 +1219,7 @@ fn run_app(
             Err(error) => {
                 // Product policy: failure of the connect/settings UI is fatal.
                 tracing::error!(target: "Main", "shell startup: {error}");
-                return 1;
+                return EXIT_FAILURE;
             }
         }
     }
@@ -1148,6 +1256,7 @@ enum BootEvent {
     Fatal,
     /// Folded into boot state.
     Consumed,
+    Ingest(jfn_playback::ingest_driver::IngestError),
 }
 
 /// Log messages reach tracing, the background-color reply applies the startup
@@ -1170,9 +1279,20 @@ fn consume_boot_event(boot: &mut BackgroundCapture, event: jfn_mpv::api::WaitEve
             apply_startup_background(boot, value);
             BootEvent::Consumed
         }
-        jfn_mpv::api::WaitEvent::Event(event) => {
-            jfn_playback::ingest_driver::jfn_playback_ingest_mpv_event_owned(&event, plat());
+        jfn_mpv::api::WaitEvent::Event(jfn_mpv::Event::SetPropertyReply {
+            reply: jfn_mpv::api::STARTUP_BACKGROUND_SET_REPLY,
+            ..
+        }) => {
+            if let BackgroundCapture::Applying { user_video_bg } = *boot {
+                *boot = BackgroundCapture::Applied { user_video_bg };
+            }
             BootEvent::Consumed
+        }
+        jfn_mpv::api::WaitEvent::Event(event) => {
+            match jfn_playback::ingest_driver::jfn_playback_ingest_mpv_event_owned(&event, plat()) {
+                Ok(_) => BootEvent::Consumed,
+                Err(error) => BootEvent::Ingest(error),
+            }
         }
     }
 }
@@ -1181,8 +1301,13 @@ fn consume_boot_event(boot: &mut BackgroundCapture, event: jfn_mpv::api::WaitEve
 fn apply_startup_background(boot: &mut BackgroundCapture, value: &jfn_mpv::PropertyValue) {
     let user_video_bg = jfn_mpv::api::background_color_from_reply(value).unwrap_or(0);
     let startup_bg = cs(STARTUP_BG_HEX);
-    unsafe { jfn_mpv::api::jfn_mpv_set_background_color_hex(startup_bg.as_ptr()) };
-    *boot = BackgroundCapture::Applied { user_video_bg };
+    let queued =
+        unsafe { jfn_mpv::api::jfn_mpv_set_startup_background_color_hex(startup_bg.as_ptr()) };
+    *boot = if queued {
+        BackgroundCapture::Applying { user_video_bg }
+    } else {
+        BackgroundCapture::Applied { user_video_bg }
+    };
 }
 
 /// Produces startup evidence from the current window and captured background.
@@ -1190,10 +1315,14 @@ fn boot_progress(boot: &BackgroundCapture) -> Option<ReadyBoot> {
     let BackgroundCapture::Applied { user_video_bg } = boot else {
         return None;
     };
-    crate::window_geometry::controller()
-        .source()
-        .snapshot()
-        .extent?;
+    match crate::window_geometry::controller().source().window_state() {
+        Ok(_) => {}
+        Err(WindowStateError::NoWindow | WindowStateError::WebOffsetUnstated) => return None,
+        Err(e) => {
+            tracing::error!(target: "Main", "boot: window state: {e}");
+            return None;
+        }
+    }
     if !plat().mpv_host().host_ready() {
         return None;
     }
@@ -1250,8 +1379,10 @@ extern "C" fn h_browsers_set_refresh_rate(hz: f64) {
         return;
     };
     jfn_gpu_paint::report_refresh(jfn_gpu_paint::RefreshSource::MpvDisplayFps, rate);
-    if let Some(overlay) = WEB_OVERLAY.lock().clone() {
-        overlay.set_refresh_rate(rate);
+    if let Some(overlay) = WEB_OVERLAY.lock().clone()
+        && let Err(e) = overlay.set_refresh_rate(rate)
+    {
+        tracing::error!(target: "Main", "refresh rate {hz} Hz not applied: {e}");
     }
 }
 extern "C" fn h_theme_set_titlebar(rgb: u32) {
@@ -1280,15 +1411,25 @@ fn run_with_cef(
             Ok(cef) => resources.services.cef = Some(cef),
             Err(error) => {
                 tracing::error!(target: "Main", "{error}");
-                return 1;
+                return EXIT_FAILURE;
             }
         }
     }
-    let rate = boot_mpv_reconcile();
+    let (hz, rate) = boot_display_hz();
+    if let Err(e) = boot_mpv_reconcile(hz) {
+        tracing::error!(target: "Main", "[FLOW] mpv size reconcile: {e}");
+        return EXIT_FAILURE;
+    }
     resources.services.playback = Some(initialize_playback_coordination());
+    // Mode posts made before the coordinator existed were dropped, and no
+    // wakeup replays them.
+    if let Err(e) = jfn_playback::ingest_driver::jfn_playback_reconcile_window_mode() {
+        tracing::error!(target: "Main", "window mode reconcile: {e}");
+        return EXIT_FAILURE;
+    }
     let Some(cef) = resources.services.cef.as_ref() else {
         tracing::error!(target: "Main", "startup invariant violated: overlay acquisition requires initialized CEF");
-        return 1;
+        return EXIT_FAILURE;
     };
     let StartedOverlay {
         manager_thread,
@@ -1297,7 +1438,7 @@ fn run_with_cef(
         Ok(started) => started,
         Err(error) => {
             tracing::error!(target: "Main", "overlay startup: {error}");
-            return 1;
+            return EXIT_FAILURE;
         }
     };
     WEB_OVERLAY.lock().replace(overlay.clone());
@@ -1322,18 +1463,18 @@ mod lifecycle_tests {
             ),
             BootEvent::Fatal
         ));
-        assert_eq!(BootError::MpvTerminated.exit_code(), 1);
-        assert_eq!(BootError::Canceled.exit_code(), 0);
+        assert_eq!(BootError::MpvTerminated.exit_code(), EXIT_FAILURE);
+        assert_eq!(BootError::Canceled.exit_code(), EXIT_SUCCESS);
         assert_eq!(
             BootError::Wake(std::io::Error::other("injected wake failure")).exit_code(),
-            1
+            EXIT_FAILURE
         );
     }
     #[test]
     fn native_owner_cleanup_runs_exactly_once_after_explicit_teardown() {
         struct Fake(std::sync::Arc<std::sync::atomic::AtomicUsize>);
         impl NativePhase for Fake {
-            fn cleanup(self) -> Result<(), CleanupError> {
+            fn cleanup(self) -> Result<(), CleanupErrors> {
                 self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 Ok(())
             }
@@ -1348,7 +1489,7 @@ mod lifecycle_tests {
     fn native_owner_rolls_back_during_unwind() {
         struct Fake(std::sync::Arc<std::sync::atomic::AtomicBool>);
         impl NativePhase for Fake {
-            fn cleanup(self) -> Result<(), CleanupError> {
+            fn cleanup(self) -> Result<(), CleanupErrors> {
                 self.0.store(true, std::sync::atomic::Ordering::Relaxed);
                 Ok(())
             }

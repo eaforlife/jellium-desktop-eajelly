@@ -12,6 +12,17 @@ pub fn stage_cef(out: &Path, cef: &cef::Cef) -> Result<()> {
     Ok(())
 }
 
+pub fn stage_mpv_scripts(out: &Path) -> Result<()> {
+    let src = crate::paths::repo_root()
+        .join("resources")
+        .join("mpv")
+        .join("scripts");
+    if src.exists() {
+        xfs::copy_dir_recursive(&src, &out.join("mpv").join("scripts"))?;
+    }
+    Ok(())
+}
+
 pub fn stage_mpv(out: &Path, mpv_info: &mpv::Mpv, used_external: bool, _bin: &Path) -> Result<()> {
     if !used_external {
         let runtime = mpv::runtime_library_name();
@@ -42,6 +53,14 @@ pub fn install(build_dir: &Path, prefix: &Path, args: &BuildArgs) -> Result<Path
     }
     if let Some(dir) = &args.external_mpv {
         xfs::copy_glob(&dir.join("lib"), prefix, &["*.dll"])?;
+    }
+
+    let scripts_src = crate::paths::repo_root()
+        .join("resources")
+        .join("mpv")
+        .join("scripts");
+    if scripts_src.exists() {
+        xfs::copy_dir_recursive(&scripts_src, &prefix.join("mpv").join("scripts"))?;
     }
     Ok(prefix.to_path_buf())
 }

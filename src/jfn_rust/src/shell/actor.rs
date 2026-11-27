@@ -13,9 +13,11 @@ use iced_core::mouse::{self, Cursor};
 use iced_core::widget::{Id, Operation as _};
 use iced_core::{Element, Event, Point, Size, clipboard, renderer, shell, window};
 use iced_runtime::user_interface::{self, UserInterface};
+use iced_widget::Widget as _;
 use jfn_gpu_paint::{Acquired, Presented};
 use jfn_platform_abi::{
-    FrameSource, LogicalPoint, LogicalSize, SurfaceHandle, Visibility, WindowExtent,
+    ExtentError, FrameSource, LogicalSize, SurfaceHandle, Visibility, WindowBasis, WindowExtent,
+    WindowPoint, WindowStateError,
 };
 
 use crate::shell::controls::{self, Direction};
@@ -34,8 +36,10 @@ const TARGET_WAIT: Duration = Duration::from_secs(5);
 
 pub enum Work {
     Event(Event),
-    Resize {
+    Window {
         extent: WindowExtent,
+        web_top: std::ffi::c_int,
+        basis: WindowBasis,
     },
     Redraw,
     OpenAbout,
@@ -49,12 +53,12 @@ pub enum Work {
         text: Option<String>,
     },
     /// A right press the shell overlay owns, in window coordinates.
-    ContextMenu(LogicalPoint),
+    ContextMenu(WindowPoint),
     /// The Menu key or Shift+F10: the edit menu at the focused field's caret.
     /// With no field focused it raises nothing.
     EditMenuAtCaret,
     /// A middle press the shell overlay owns, in window coordinates.
-    PrimaryPaste(LogicalPoint),
+    PrimaryPaste(WindowPoint),
     /// An edit menu's selection, for the field it named.
     EditAt {
         field: Target,
@@ -317,23 +321,25 @@ pub struct Model {
     screen: crate::connection::Screen,
     titlebar: Titlebar,
     inputs: ChromeInputs,
+    web_top: std::ffi::c_int,
+    basis: WindowBasis,
     theme: Theme,
 }
 
 impl Model {
     fn titlebar_shown(&self) -> bool {
-        state::titlebar_shown(self.inputs)
+        state::titlebar_shown(self.web_top, self.inputs)
     }
 
     /// The modal stack's own view, then the titlebar, then nothing.
     fn view(&self) -> Element<'_, Message, Theme, iced_wgpu::Renderer> {
         if self.stack.occupied() {
-            return self.stack.view(&self.screen).map(Message::Modal);
+            return self.stack.view(&self.screen).map(Message::Modal).boxed();
         }
         if self.titlebar_shown() {
-            return self.titlebar.view().map(Message::Chrome);
+            return self.titlebar.view().map(Message::Chrome).boxed();
         }
-        iced_widget::space::horizontal().into()
+        iced_widget::space::horizontal().boxed()
     }
 
     fn transition(&mut self, transition: Transition) {
@@ -548,10 +554,13 @@ fn run(
     on_ready: std::sync::mpsc::SyncSender<Result<(), LoopStartError>>,
 ) {
     let mut pending = Vec::new();
-    let Some(target) = wait_for_target(surface, rx, wake_tx, &mut pending) else {
-        crate::shell::publish_no_overlay();
-        drop(on_ready.send(Err(LoopStartError::NoTarget)));
-        return;
+    let target = match wait_for_target(surface, rx, wake_tx, &mut pending) {
+        Ok(target) => target,
+        Err(error) => {
+            crate::shell::publish_no_overlay();
+            drop(on_ready.send(Err(LoopStartError::NoTarget(error))));
+            return;
+        }
     };
     let mut state = match Loop::start(surface, wake_tx, target, metadata, actions) {
         Ok(state) => state,
@@ -567,14 +576,30 @@ fn run(
     state.run(rx);
 }
 
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum TargetWaitError {
+    #[error("platform unavailable")]
+    NoPlatform,
+    #[error("startup canceled by shutdown")]
+    Shutdown,
+    #[error("work channel disconnected")]
+    Disconnected,
+    #[error("no window target for the overlay surface before the deadline")]
+    Timeout,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum LoopStartError {
-    #[error("window target unavailable or startup canceled")]
-    NoTarget,
+    #[error("window target: {0}")]
+    NoTarget(#[source] TargetWaitError),
     #[error("GPU device unavailable")]
     NoGpu,
-    #[error("window extent unavailable")]
-    NoExtent,
+    #[error("platform unavailable")]
+    NoPlatform,
+    #[error("window extent: {0}")]
+    Extent(#[from] ExtentError),
+    #[error("window state: {0}")]
+    WindowState(#[source] WindowStateError),
     #[error("swapchain creation failed: {0}")]
     Painter(#[source] jfn_gpu_paint::SurfaceLost),
 }
@@ -589,7 +614,7 @@ impl Loop {
         actions: crate::shell::ApplicationActions,
     ) -> Result<Loop, LoopStartError> {
         let gpu = jfn_gpu_paint::surfaces().ok_or(LoopStartError::NoGpu)?;
-        let extent = initial_extent().ok_or(LoopStartError::NoExtent)?;
+        let (extent, web_top, basis) = initial_window()?;
         let wake = {
             let tx = wake_tx.clone();
             Arc::new(move || {
@@ -605,6 +630,8 @@ impl Loop {
             connection,
             titlebar: Titlebar::new(),
             inputs: crate::shell::chrome::inputs(),
+            web_top,
+            basis,
             theme: Theme {
                 chrome_background: crate::shell::theme::chrome_background(),
                 ..Theme::default()
@@ -614,7 +641,7 @@ impl Loop {
             let wake = Arc::clone(&wake);
             move || wake()
         });
-        publish(&model, extent);
+        publish(&model);
         apply_visibility(surface, &model);
         Ok(Loop {
             actions,
@@ -717,9 +744,17 @@ impl Loop {
                 }
                 self.events.push(event);
             }
-            Work::Resize { extent } => {
-                self.painter.resize(extent);
-                self.current = extent;
+            Work::Window {
+                extent,
+                web_top,
+                basis,
+            } => {
+                self.model.web_top = web_top;
+                self.model.basis = basis;
+                if extent != self.current {
+                    self.painter.resize(extent);
+                    self.current = extent;
+                }
                 self.discard_cache();
             }
             Work::Redraw => {}
@@ -882,7 +917,7 @@ impl Loop {
             overlay.retain_settings_state(focus, offset);
         }
         if settled {
-            publish(&this.model, this.current);
+            publish(&this.model);
             return;
         }
 
@@ -912,7 +947,7 @@ impl Loop {
             }
         }
         this.immediate = true;
-        publish(&this.model, this.current);
+        publish(&this.model);
         apply_visibility(this.surface, &this.model);
         if modal_closed {
             // Keep this as the final visibility operation in the transition
@@ -943,6 +978,7 @@ fn resolve_deferred(
                 menu_anchor = menu_anchor.or(raise_menu(
                     &fields,
                     p,
+                    model.basis,
                     queued,
                     model.stack.identity() == Some(Identity::SettingsOverlay),
                     actions,
@@ -952,7 +988,7 @@ fn resolve_deferred(
                 menu_anchor = menu_anchor.or_else(|| fields.focused().map(caret_anchor));
             }
             Deferred::PrimaryPaste(p) => {
-                if let Some(field) = fields.at(point(p.x, p.y)) {
+                if let Some(field) = fields.at(point(p)) {
                     read_primary(wake_tx.clone(), Reader::Field(field.id.clone()));
                 }
             }
@@ -968,8 +1004,16 @@ fn resolve_deferred(
     }
     if let Some(anchor) = menu_anchor {
         let raised = Fields::collect(ui, painter.renderer());
-        if let Some(field) = raised.at(point(anchor.x, anchor.y)) {
-            crate::shell::menu::open_edit(field, anchor, crate::shell::lang::strings());
+        if let Some(field) = raised.at(point(anchor)) {
+            report_menu(
+                "edit menu",
+                crate::shell::menu::open_edit(
+                    field,
+                    anchor,
+                    model.basis,
+                    crate::shell::lang::strings(),
+                ),
+            );
         }
     }
 }
@@ -1027,7 +1071,7 @@ fn update_ui(
         .collect();
     events.clear();
 
-    let messages: Vec<Message> = bus.drain().collect();
+    let messages: Vec<Message> = bus.drain().map(|(message, _receipt)| message).collect();
     let (interaction, redraw) = match &state {
         user_interface::State::Updated {
             mouse_interaction,
@@ -1122,15 +1166,15 @@ fn paint(
 /// A request that needs a widget tree to resolve against, held until the pass
 /// has built one.
 enum Deferred {
-    ContextMenu(LogicalPoint),
+    ContextMenu(WindowPoint),
     EditMenuAtCaret,
-    PrimaryPaste(LogicalPoint),
+    PrimaryPaste(WindowPoint),
     Edit(Target, jfn_input::EditCommand),
 }
 
 /// Applies every pass of a chained widget operation.
-fn operate_all<Message>(
-    ui: &mut UserInterface<'_, Message, Theme, iced_wgpu::Renderer>,
+fn operate_all<'a, Message: 'a>(
+    ui: &mut UserInterface<'a, Message, Theme, iced_wgpu::Renderer>,
     renderer: &iced_wgpu::Renderer,
     operation: &mut dyn iced_core::widget::Operation,
 ) {
@@ -1144,8 +1188,8 @@ fn operate_all<Message>(
 
 /// Applies every queued [`Apply`] and returns what `Cut` and `Copy` produced,
 /// in order.
-fn apply_queued<Message>(
-    ui: &mut UserInterface<'_, Message, Theme, iced_wgpu::Renderer>,
+fn apply_queued<'a, Message: 'a>(
+    ui: &mut UserInterface<'a, Message, Theme, iced_wgpu::Renderer>,
     renderer: &iced_wgpu::Renderer,
     queued: &mut Vec<Apply>,
 ) -> Vec<String> {
@@ -1263,11 +1307,8 @@ fn publish_primary(fields: &Fields, last: &mut Option<(Id, u64)>) {
 
 /// The window point an edit menu raised from the keyboard anchors at: the
 /// focused field's caret.
-fn caret_anchor(field: &crate::shell::fields::Snapshot) -> LogicalPoint {
-    LogicalPoint {
-        x: field.caret.x as i32,
-        y: field.caret.y as i32,
-    }
+fn caret_anchor(field: &crate::shell::fields::Snapshot) -> WindowPoint {
+    window_point(field.caret)
 }
 
 /// The menu a right press raises: the edit menu over a shell field, with the
@@ -1277,16 +1318,24 @@ fn caret_anchor(field: &crate::shell::fields::Snapshot) -> LogicalPoint {
 /// The field takes focus on Windows and macOS whether or not the press landed
 /// inside its selection, so the keys typed after the menu closes reach it and
 /// macOS's own Edit menu resolves [`Target::Focused`] to it.
+fn report_menu(menu: &str, opened: Result<(), jfn_platform_abi::MenuOpenError>) {
+    match opened {
+        Ok(()) | Err(jfn_platform_abi::MenuOpenError::NothingSelectable) => {}
+        Err(e) => tracing::error!("{menu}: {e}"),
+    }
+}
+
 fn raise_menu(
     fields: &Fields,
-    p: LogicalPoint,
+    p: WindowPoint,
+    basis: WindowBasis,
     queued: &mut Vec<Apply>,
     restricted: bool,
     actions: crate::shell::ApplicationActions,
-) -> Option<LogicalPoint> {
-    let at = point(p.x, p.y);
+) -> Option<WindowPoint> {
+    let at = point(p);
     let Some(field) = fields.at(at) else {
-        (actions.open_menu)(p, restricted);
+        report_menu("app menu", (actions.open_menu)(p, basis, restricted));
         return None;
     };
     let lease = jfn_platform_abi::try_lease()?;
@@ -1300,10 +1349,8 @@ fn raise_menu(
     Some(p)
 }
 
-/// Publishes the routing state at the extent's exact logical size.
-fn publish(model: &Model, extent: WindowExtent) {
+fn publish(model: &Model) {
     jfn_input::publish_shell_state(crate::shell::state::shell_state(
-        Some(extent),
         model.inputs,
         model.stack.occupied(),
     ));
@@ -1336,8 +1383,8 @@ fn wait_for_target(
     rx: &Receiver<Work>,
     wake_tx: &Sender<Work>,
     pending: &mut Vec<Work>,
-) -> Option<jfn_gpu_paint::WindowTarget> {
-    let lease = jfn_platform_abi::try_lease()?;
+) -> Result<jfn_gpu_paint::WindowTarget, TargetWaitError> {
+    let lease = jfn_platform_abi::try_lease().ok_or(TargetWaitError::NoPlatform)?;
     let plat = lease.platform();
     let tx = wake_tx.clone();
     plat.on_surface_target_ready(
@@ -1356,42 +1403,48 @@ fn await_target<T>(
     pending: &mut Vec<Work>,
     deadline: Instant,
     mut query: impl FnMut() -> Option<T>,
-) -> Option<T> {
+) -> Result<T, TargetWaitError> {
     loop {
         if let Some(target) = query() {
-            return Some(target);
+            return Ok(target);
         }
         if Instant::now() >= deadline {
-            tracing::error!("shell: no window target for the overlay surface");
-            return None;
+            return Err(TargetWaitError::Timeout);
         }
         match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok(Work::Shutdown) | Err(RecvTimeoutError::Disconnected) => return None,
+            Ok(Work::Shutdown) => return Err(TargetWaitError::Shutdown),
             Ok(work) => pending.push(work),
-            Err(RecvTimeoutError::Timeout) => {
-                tracing::error!("shell: no window target for the overlay surface");
-                return None;
-            }
+            Err(RecvTimeoutError::Disconnected) => return Err(TargetWaitError::Disconnected),
+            Err(RecvTimeoutError::Timeout) => return Err(TargetWaitError::Timeout),
         }
     }
 }
 
-/// The extent the overlay starts at: the window source's own when it has one,
-/// else 1280x720 logical at the platform's reported scale.
-fn initial_extent() -> Option<WindowExtent> {
-    let lease = jfn_platform_abi::try_lease()?;
+fn initial_window() -> Result<(WindowExtent, std::ffi::c_int, WindowBasis), LoopStartError> {
+    let lease = jfn_platform_abi::try_lease().ok_or(LoopStartError::NoPlatform)?;
     let plat = lease.platform();
-    if let Some(extent) = plat.window_owner().source().snapshot().extent {
-        return Some(extent);
+    match plat.window_owner().source().window_state() {
+        Ok(window) => Ok((window.extent, window.web_top, window.basis)),
+        Err(WindowStateError::NoWindow | WindowStateError::WebOffsetUnstated) => {
+            let scale = plat.scale().map_err(LoopStartError::WindowState)?;
+            let logical = LogicalSize { w: 1280, h: 720 };
+            let physical = logical.to_physical(scale).map_err(ExtentError::from)?;
+            Ok((
+                WindowExtent::new(physical, scale, logical)?,
+                0,
+                WindowBasis::FIXED,
+            ))
+        }
+        Err(e) => Err(LoopStartError::WindowState(e)),
     }
-    let scale = plat.scale();
-    let logical = LogicalSize { w: 1280, h: 720 };
-    WindowExtent::new(logical.to_physical(scale)?, scale, logical)
 }
 
-/// The pointer position an iced event carries, for the sink's convenience.
-pub(crate) fn point(x: i32, y: i32) -> Point {
-    Point::new(x as f32, y as f32)
+pub(crate) fn point(p: WindowPoint) -> Point {
+    Point::new(p.x() as f32, p.y() as f32)
+}
+
+pub(crate) fn window_point(p: Point) -> WindowPoint {
+    WindowPoint::from_window(f64::from(p.x), f64::from(p.y))
 }
 
 #[cfg(test)]
@@ -1440,7 +1493,7 @@ mod tests {
                 (queries == 2).then_some(42)
             },
         );
-        assert_eq!(target, Some(42));
+        assert_eq!(target, Ok(42));
         assert!(matches!(pending.as_slice(), [super::Work::OpenAbout]));
     }
 
@@ -1456,13 +1509,13 @@ mod tests {
                 super::Instant::now() + super::TARGET_WAIT,
                 || None::<()>
             ),
-            None
+            Err(super::TargetWaitError::Shutdown)
         );
         // A continuous work stream must not extend the deadline.
         tx.send(super::Work::Redraw).unwrap();
         assert_eq!(
             super::await_target(&rx, &mut pending, super::Instant::now(), || None::<()>),
-            None
+            Err(super::TargetWaitError::Timeout)
         );
         assert!(pending.is_empty());
     }
@@ -1554,6 +1607,8 @@ mod tests {
             connection: crate::connection::Connection::new(String::new()),
             titlebar: Titlebar::new(),
             inputs: ChromeInputs::default(),
+            web_top: 0,
+            basis: WindowBasis::FIXED,
             theme: Theme::default(),
         };
         model.apply_message_batch(messages);
@@ -1627,6 +1682,8 @@ mod tests {
             connection: crate::connection::Connection::new(String::new()),
             titlebar: Titlebar::new(),
             inputs: ChromeInputs::default(),
+            web_top: 0,
+            basis: WindowBasis::FIXED,
             theme: Theme::default(),
         };
         for message in ordered[..4].iter().cloned() {
@@ -1653,6 +1710,8 @@ mod tests {
             connection: crate::connection::Connection::new(String::new()),
             titlebar: Titlebar::new(),
             inputs: ChromeInputs::default(),
+            web_top: 0,
+            basis: WindowBasis::FIXED,
             theme: Theme::default(),
         };
         let pre_event_focus = Some(crate::shell::settings::DEVICE_NAME_FIELD);
@@ -1767,6 +1826,8 @@ mod tests {
             connection: crate::connection::Connection::new(String::new()),
             titlebar: Titlebar::new(),
             inputs: ChromeInputs::default(),
+            web_top: 0,
+            basis: WindowBasis::FIXED,
             theme: Theme::default(),
         };
 

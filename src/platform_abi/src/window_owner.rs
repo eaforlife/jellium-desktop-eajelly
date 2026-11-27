@@ -2,7 +2,9 @@
 //! it: the boot-geometry seeding path, whether mpv's size is reconciled at
 //! boot, and which [`WindowSource`] is authoritative.
 
-use crate::geometry::{BootGeometry, LogicalSize, PhysicalSize, Scale, mpv_reconcile_size};
+use crate::geometry::{
+    BootGeometry, LogicalSize, MpvScreen, PhysicalSize, Scale, Unrepresentable, mpv_reconcile_size,
+};
 use crate::window_source::WindowSource;
 
 /// The app window where the app creates it: its live geometry, and the boot
@@ -21,6 +23,7 @@ pub struct MpvBootWindow {
     /// mpv's `--geometry`, physical pixels.
     pub geometry: String,
     pub force_position: bool,
+    pub screen: Option<MpvScreen>,
     pub maximized: bool,
 }
 
@@ -60,25 +63,21 @@ impl<'src> WindowOwner<'src> {
             WindowOwner::Mpv(_) => Some(MpvBootWindow {
                 geometry: g.mpv_geometry_string(),
                 force_position: g.force_position(),
+                screen: g.mpv_screen().cloned(),
                 maximized: g.maximized(),
             }),
         }
     }
 
-    /// The physical size mpv's window is resized to at boot.
-    ///
-    /// `None` where the app creates the app window: mpv sizes nothing there.
-    /// `None` where `locked`, where `saved_logical` maps to no representable
-    /// physical size, and where it maps to `saved_physical`.
     pub fn reconcile_mpv_size(
         &self,
         reported: Scale,
         saved_logical: LogicalSize,
         saved_physical: PhysicalSize,
         locked: bool,
-    ) -> Option<PhysicalSize> {
+    ) -> Result<Option<PhysicalSize>, Unrepresentable> {
         match self {
-            WindowOwner::App(_) => None,
+            WindowOwner::App(_) => Ok(None),
             WindowOwner::Mpv(_) => {
                 mpv_reconcile_size(reported, saved_logical, saved_physical, locked)
             }
@@ -89,8 +88,11 @@ impl<'src> WindowOwner<'src> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{COVERED_SCALES, WindowGeometry};
-    use crate::window_source::WindowSnapshot;
+    use crate::geometry::{
+        Bounds, COVERED_SCALES, ClampError, ScreenName, TargetScreen, WindowGeometry,
+        WindowPlacement, WindowPos, clamp_to_screen,
+    };
+    use crate::window_source::{WindowState, WindowStateError};
     use parking_lot::Mutex;
 
     struct SeedingWindow {
@@ -106,64 +108,98 @@ mod tests {
     }
 
     impl WindowSource for SeedingWindow {
-        fn snapshot(&self) -> WindowSnapshot {
-            WindowSnapshot {
-                extent: None,
-                position: None,
-                maximized: false,
-                fullscreen: false,
-            }
+        fn window_state(&self) -> Result<WindowState, WindowStateError> {
+            Err(WindowStateError::NoWindow)
         }
     }
 
     impl AppCreatedWindow for SeedingWindow {
         fn seed_boot_geometry(&self, g: &BootGeometry) {
-            self.seeded.lock().push(*g);
+            self.seeded.lock().push(g.clone());
         }
     }
 
     struct MpvWindow;
 
     impl WindowSource for MpvWindow {
-        fn snapshot(&self) -> WindowSnapshot {
-            WindowSnapshot {
-                extent: None,
-                position: None,
-                maximized: false,
-                fullscreen: false,
-            }
+        fn window_state(&self) -> Result<WindowState, WindowStateError> {
+            Err(WindowStateError::NoWindow)
         }
     }
 
     impl MpvCreatedWindow for MpvWindow {}
 
-    fn boot(scale: Scale, x: i32, y: i32, maximized: bool) -> BootGeometry {
+    fn boot(
+        scale: Scale,
+        position: Option<WindowPos>,
+        maximized: bool,
+    ) -> Result<BootGeometry, Unrepresentable> {
         let logical = LogicalSize { w: 1280, h: 720 };
-        let physical = logical
-            .to_physical(scale)
-            .unwrap_or(PhysicalSize { w: 1280, h: 720 });
-        BootGeometry::from_clamped(
+        let physical = logical.to_physical(scale)?;
+        Ok(BootGeometry::from_clamped(
             logical,
             scale,
-            WindowGeometry::from_raw(physical.w, physical.h, x, y),
+            WindowGeometry {
+                w: physical.w,
+                h: physical.h,
+                placement: position.map(|p| WindowPlacement::new(None, p)),
+            }
+            .on_primary(),
             maximized,
-        )
+        ))
     }
 
     #[test]
-    fn an_app_owner_seeds_and_hands_mpv_nothing_at_every_covered_scale() {
+    fn an_mpv_owner_hands_mpv_the_screen_the_clamp_named() -> Result<(), ClampError> {
+        let saved = WindowGeometry {
+            w: 1280,
+            h: 720,
+            placement: Some(WindowPlacement::new(
+                ScreenName::new("DISPLAY2".to_owned()),
+                WindowPos { x: 100, y: 50 },
+            )),
+        };
+        let clamped = clamp_to_screen(
+            &saved,
+            |name| {
+                Ok(Some(TargetScreen {
+                    mpv: MpvScreen::Name(name.clone()),
+                    bounds: Bounds { w: 2560, h: 1440 },
+                }))
+            },
+            || Ok(None),
+        )?;
+        let logical = LogicalSize { w: 1280, h: 720 };
+        let g = BootGeometry::from_clamped(logical, Scale::ONE, clamped, false);
+        let handed = WindowOwner::Mpv(&MpvWindow)
+            .apply_boot_geometry(&g)
+            .map(|w| (w.geometry, w.screen));
+        assert_eq!(
+            handed,
+            Some((
+                "1280x720+100+50".to_owned(),
+                ScreenName::new("DISPLAY2".to_owned()).map(MpvScreen::Name)
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_app_owner_seeds_and_hands_mpv_nothing_at_every_covered_scale()
+    -> Result<(), Unrepresentable> {
         let window = SeedingWindow::new();
         let owner = WindowOwner::App(&window);
         let mut handed = Vec::new();
         for scale in COVERED_SCALES {
             handed.push(
                 owner
-                    .apply_boot_geometry(&boot(scale, 100, 50, false))
+                    .apply_boot_geometry(&boot(scale, Some(WindowPos { x: 100, y: 50 }), false)?)
                     .map(|w| w.geometry),
             );
         }
         assert_eq!(handed, vec![None; COVERED_SCALES.len()]);
         assert_eq!(window.seeded.lock().len(), COVERED_SCALES.len());
+        Ok(())
     }
 
     #[test]
@@ -172,36 +208,38 @@ mod tests {
         let owner = WindowOwner::App(&window);
         let logical = LogicalSize { w: 1280, h: 720 };
         let physical = PhysicalSize { w: 1280, h: 720 };
-        let answers: Vec<Option<PhysicalSize>> = COVERED_SCALES
+        let answers: Vec<Result<Option<PhysicalSize>, Unrepresentable>> = COVERED_SCALES
             .into_iter()
             .map(|s| owner.reconcile_mpv_size(s, logical, physical, false))
             .collect();
-        assert_eq!(answers, vec![None; COVERED_SCALES.len()]);
+        assert_eq!(answers, vec![Ok(None); COVERED_SCALES.len()]);
     }
 
     #[test]
     fn an_mpv_owner_seeds_nothing_and_answers_the_exact_geometry_string() {
         let owner = WindowOwner::Mpv(&MpvWindow);
-        let describe = |x, y, maximized| {
-            owner
-                .apply_boot_geometry(&boot(Scale::ONE, x, y, maximized))
-                .map(|w| (w.geometry, w.force_position, w.maximized))
+        let describe = |position, maximized| {
+            boot(Scale::ONE, position, maximized).map(|g| {
+                owner
+                    .apply_boot_geometry(&g)
+                    .map(|w| (w.geometry, w.force_position, w.maximized))
+            })
         };
         assert_eq!(
-            describe(-1, -1, false),
-            Some(("1280x720".to_owned(), false, false))
+            describe(None, false),
+            Ok(Some(("1280x720".to_owned(), false, false)))
         );
         assert_eq!(
-            describe(100, 50, false),
-            Some(("1280x720+100+50".to_owned(), true, false))
+            describe(Some(WindowPos { x: 100, y: 50 }), false),
+            Ok(Some(("1280x720+100+50".to_owned(), true, false)))
         );
         assert_eq!(
-            describe(-1, -1, true),
-            Some(("1280x720".to_owned(), false, true))
+            describe(None, true),
+            Ok(Some(("1280x720".to_owned(), false, true)))
         );
         assert_eq!(
-            describe(100, 50, true),
-            Some(("1280x720+100+50".to_owned(), true, true))
+            describe(Some(WindowPos { x: 100, y: 50 }), true),
+            Ok(Some(("1280x720+100+50".to_owned(), true, true)))
         );
     }
 
@@ -210,19 +248,19 @@ mod tests {
         let owner = WindowOwner::Mpv(&MpvWindow);
         let logical = LogicalSize { w: 1280, h: 720 };
         let physical = PhysicalSize { w: 1280, h: 720 };
-        let answers: Vec<Option<PhysicalSize>> = COVERED_SCALES
+        let answers: Vec<Result<Option<PhysicalSize>, Unrepresentable>> = COVERED_SCALES
             .into_iter()
             .map(|s| owner.reconcile_mpv_size(s, logical, physical, false))
             .collect();
         assert_eq!(
             answers,
             vec![
-                Some(PhysicalSize { w: 640, h: 360 }),
-                Some(PhysicalSize { w: 960, h: 540 }),
-                None,
-                Some(PhysicalSize { w: 1600, h: 900 }),
-                Some(PhysicalSize { w: 1920, h: 1080 }),
-                Some(PhysicalSize { w: 2560, h: 1440 }),
+                Ok(Some(PhysicalSize { w: 640, h: 360 })),
+                Ok(Some(PhysicalSize { w: 960, h: 540 })),
+                Ok(None),
+                Ok(Some(PhysicalSize { w: 1600, h: 900 })),
+                Ok(Some(PhysicalSize { w: 1920, h: 1080 })),
+                Ok(Some(PhysicalSize { w: 2560, h: 1440 })),
             ]
         );
     }
@@ -232,10 +270,10 @@ mod tests {
         let owner = WindowOwner::Mpv(&MpvWindow);
         let logical = LogicalSize { w: 1280, h: 720 };
         let physical = PhysicalSize { w: 1280, h: 720 };
-        let answers: Vec<Option<PhysicalSize>> = COVERED_SCALES
+        let answers: Vec<Result<Option<PhysicalSize>, Unrepresentable>> = COVERED_SCALES
             .into_iter()
             .map(|s| owner.reconcile_mpv_size(s, logical, physical, true))
             .collect();
-        assert_eq!(answers, vec![None; COVERED_SCALES.len()]);
+        assert_eq!(answers, vec![Ok(None); COVERED_SCALES.len()]);
     }
 }

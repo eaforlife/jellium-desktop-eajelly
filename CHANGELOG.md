@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Reduced the minimum Windows PiP width to 10% of the usable display width.
+
 ## 3.2.6-eajelly
 
 - Updated upstream dependencies and platform APIs.

@@ -1,5 +1,6 @@
 use cef::rc::Rc;
 use cef::*;
+use jfn_platform_abi::{MenuOpenError, WindowStateError};
 use std::os::raw::{c_int, c_void};
 use std::sync::Arc;
 
@@ -92,6 +93,29 @@ wrap_context_menu_handler! {
                 callback.cancel();
                 return 1;
             };
+            let reported = jfn_platform_abi::WebPoint::from_view(
+                f64::from(params.xcoord()),
+                f64::from(params.ycoord()),
+            );
+            let (anchor, basis) = match jfn_input::web_to_window_point(reported) {
+                Ok(at) => at,
+                Err(e) => {
+                    if !matches!(
+                        e,
+                        WindowStateError::NoWindow
+                            | WindowStateError::WebOffsetUnstated
+                            | WindowStateError::NoPlatform
+                    ) {
+                        jfn_logging::log(
+                            jfn_logging::Category::Cef,
+                            jfn_logging::Level::Error,
+                            &format!("context menu anchor: window state: {e}"),
+                        );
+                    }
+                    callback.cancel();
+                    return 1;
+                }
+            };
             let Some(session) = self.inner.menu_open() else {
                 callback.cancel();
                 return 1;
@@ -119,17 +143,22 @@ wrap_context_menu_handler! {
                 }
             }
 
-            host.open(MenuRequest {
+            let opened = host.open(MenuRequest {
                 items,
-                x: params.xcoord(),
-                // The anchor is in the web overlay's own view space; the app menu
-                // is placed in window space, so the strip the overlay was sized
-                // below is added back.
-                y: params.ycoord() + self.inner.view_top(),
+                anchor,
+                basis,
                 width: 0,
                 initial: MENU_DISMISSED,
                 on_selected: self.inner.menu_selection_callback(session),
             });
+            match opened {
+                Ok(_) | Err(MenuOpenError::NothingSelectable) => {}
+                Err(e) => jfn_logging::log(
+                    jfn_logging::Category::Cef,
+                    jfn_logging::Level::Error,
+                    &format!("context menu: {e}"),
+                ),
+            }
             1
         }
     }

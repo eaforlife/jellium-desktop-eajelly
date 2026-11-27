@@ -5,8 +5,6 @@ use parking_lot::Mutex;
 use crate::shell::state::ChromeInputs;
 
 static INPUTS: Mutex<ChromeInputs> = Mutex::new(ChromeInputs {
-    client_side_decorations: false,
-    fullscreen: false,
     video_active: false,
     osd_visible: false,
 });
@@ -34,14 +32,6 @@ pub fn set_video_active(active: bool) {
     update(|i| i.video_active = active);
 }
 
-pub fn set_client_side_decorations(client_side: bool) {
-    update(|i| i.client_side_decorations = client_side);
-}
-
-pub fn set_fullscreen(fullscreen: bool) {
-    update(|i| i.fullscreen = fullscreen);
-}
-
 fn update(f: impl FnOnce(&mut ChromeInputs)) {
     let changed = {
         let mut inputs = INPUTS.lock();
@@ -58,7 +48,7 @@ fn update(f: impl FnOnce(&mut ChromeInputs)) {
 
 use iced_core::{Alignment, Element, Length, Point, Rectangle, Size, mouse};
 use iced_widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
-use iced_widget::{button, container, row, space};
+use iced_widget::{Widget as _, button, container, row, space};
 
 use crate::shell::theme::{self, Theme};
 
@@ -124,7 +114,7 @@ impl Titlebar {
         .width(Length::Fill)
         .height(height)
         .class(theme::ContainerClass::Chrome)
-        .into()
+        .boxed()
     }
 
     pub fn update(&mut self, message: Message) {
@@ -152,16 +142,19 @@ fn control(
     class: theme::ButtonClass,
 ) -> Element<'static, Message, Theme, iced_wgpu::Renderer> {
     button(
-        Canvas::new(icon)
-            .width(Length::Fixed(ICON))
-            .height(Length::Fixed(ICON)),
+        container(
+            Canvas::new(icon)
+                .width(Length::Fixed(ICON))
+                .height(Length::Fixed(ICON)),
+        )
+        .center(Length::Fill),
     )
     .on_press(message)
     .width(Length::Fixed(CONTROL_WIDTH))
     .height(Length::Fill)
     .padding(0)
     .class(class)
-    .into()
+    .boxed()
 }
 
 impl<Message> canvas::Program<Message, Theme, iced_wgpu::Renderer> for Icon {

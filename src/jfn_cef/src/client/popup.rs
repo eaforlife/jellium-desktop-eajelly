@@ -1,12 +1,11 @@
 use cef::rc::Rc;
-use cef::{
-    ImplBrowserHost, ImplTask, KeyEvent, Task, ThreadId, WrapTask, post_task, sys, wrap_task,
-};
+use cef::{ImplBrowserHost, ImplTask, KeyEvent, Task, WrapTask, sys, wrap_task};
+use jfn_platform_abi::{MenuOpenError, WindowStateError};
 use std::sync::Arc;
 
 use crate::platform_ops::{MenuDelivery, MenuItem, MenuRequest, MenuSelection};
 
-use super::{Inner, PopupState};
+use super::{Inner, PopupAt, PopupState};
 
 fn options_as_items(options: &[String]) -> Vec<MenuItem> {
     options
@@ -39,7 +38,32 @@ impl Inner {
         p.options.clear();
         p.selected_idx = -1;
         p.selectable.clear();
+        p.rect = None;
         p.anchor = None;
+        p.requested = false;
+    }
+
+    fn popup_at(&self, x: i32, y: i32) -> Result<PopupAt, WindowStateError> {
+        match self.dropdown() {
+            MenuDelivery::Host(_) => jfn_input::web_to_window_point(
+                jfn_platform_abi::WebPoint::from_view(f64::from(x), f64::from(y)),
+            )
+            .map(|(point, basis)| PopupAt::Window(point, basis)),
+            MenuDelivery::Composited | MenuDelivery::Page => Ok(PopupAt::View(x, y)),
+        }
+    }
+
+    fn report_popup_at(e: &WindowStateError) {
+        match e {
+            WindowStateError::NoWindow
+            | WindowStateError::WebOffsetUnstated
+            | WindowStateError::NoPlatform => {}
+            e => jfn_logging::log(
+                jfn_logging::Category::Cef,
+                jfn_logging::Level::Error,
+                &format!("popup position: window state: {e}"),
+            ),
+        }
     }
 
     pub(crate) fn on_popup_show(&self, show: bool) {
@@ -49,22 +73,33 @@ impl Inner {
             Self::reset_popup_state(&mut p);
         }
         if !show {
-            self.hide_dropdown();
+            Self::report_hide(self.hide_dropdown());
             return;
         }
         self.send_process_message_named("getPopupOptions");
     }
 
     pub(crate) fn on_popup_size(self: &Arc<Self>, x: i32, y: i32, w: i32, h: i32) {
+        let at = match self.popup_at(x, y) {
+            Ok(at) => Some(at),
+            Err(e) => {
+                Self::report_popup_at(&e);
+                None
+            }
+        };
         {
             let mut p = self.popup.lock();
-            p.x = x;
-            p.y = y;
+            if p.requested {
+                return;
+            }
+            p.rect = at;
             p.w = w;
             p.h = h;
             p.size_received = true;
         }
-        self.try_show_popup();
+        if let Err(e) = self.try_show_popup() {
+            Self::report_menu_open(e);
+        }
     }
 
     pub(crate) fn set_popup_options(
@@ -74,29 +109,52 @@ impl Inner {
         selectable: Vec<i32>,
         anchor: Option<(i32, i32)>,
     ) {
+        let anchor = anchor.map(|(x, y)| self.popup_at(x, y));
+        if let Some(Err(e)) = &anchor {
+            Self::report_popup_at(e);
+        }
         {
             let mut p = self.popup.lock();
             p.options = opts;
             p.selected_idx = selected;
             p.selectable = selectable;
-            p.anchor = anchor;
+            match anchor {
+                Some(Err(_)) => p.rect = None,
+                Some(Ok(at)) => p.anchor = Some(at),
+                None => {}
+            }
             p.options_received = true;
         }
-        self.try_show_popup();
+        if let Err(e) = self.try_show_popup() {
+            Self::report_menu_open(e);
+        }
     }
 
-    fn try_show_popup(self: &Arc<Self>) {
-        let (x, y, w, h, opts, selected, selectable) = {
-            let p = self.popup.lock();
+    fn report_menu_open(e: MenuOpenError) {
+        if e != MenuOpenError::NothingSelectable {
+            jfn_logging::log(
+                jfn_logging::Category::Cef,
+                jfn_logging::Level::Error,
+                &format!("dropdown menu: {e}"),
+            );
+        }
+    }
+
+    fn try_show_popup(self: &Arc<Self>) -> Result<(), MenuOpenError> {
+        let (at, w, h, opts, selected, selectable) = {
+            let mut p = self.popup.lock();
             if !p.visible || !p.size_received || !p.options_received {
-                return;
+                return Ok(());
             }
-            // Blink's popup rect (p.x/p.y) flips above the element near the
-            // window bottom; the anchor keeps the menu under the box.
-            let (x, y) = p.anchor.unwrap_or((p.x, p.y));
+            p.size_received = false;
+            p.options_received = false;
+            p.requested = true;
+            let rect = p.rect.take();
+            let Some(at) = p.anchor.take().or(rect) else {
+                return Ok(());
+            };
             (
-                x,
-                y,
+                at,
                 p.w,
                 p.h,
                 p.options.clone(),
@@ -110,28 +168,52 @@ impl Inner {
             let authority = Arc::clone(&inner.session);
             authority.dispatch(|| {
                 let mut task = DispatchPopupTask::new(inner, idx, selected, selectable.clone());
-                let _ = post_task(ThreadId::UI, Some(&mut task));
+                if crate::ui_task::post_ui(&mut task).is_err() {
+                    jfn_logging::log(
+                        jfn_logging::Category::Cef,
+                        jfn_logging::Level::Error,
+                        &format!("dropdown selection {idx}: the UI thread rejected the task"),
+                    );
+                }
             });
         });
-        match self.dropdown() {
-            MenuDelivery::Host(host) => host.open(MenuRequest {
-                items: options_as_items(&opts),
-                x,
-                y,
-                width: w,
-                initial: selected,
-                on_selected,
-            }),
-            MenuDelivery::Composited => self.surface().popup_show(x, y, w, h),
-            MenuDelivery::Page => {}
+        match (self.dropdown(), at) {
+            (MenuDelivery::Host(host), PopupAt::Window(anchor, basis)) => {
+                let opened = host.open(MenuRequest {
+                    items: options_as_items(&opts),
+                    anchor,
+                    basis,
+                    width: w,
+                    initial: selected,
+                    on_selected,
+                });
+                match opened {
+                    Ok(handle) => self.popup.lock().menu = Some(handle),
+                    Err(e) => {
+                        self.popup.lock().menu = None;
+                        return Err(e);
+                    }
+                }
+            }
+            (MenuDelivery::Composited, PopupAt::View(x, y)) => {
+                self.surface().popup_show(x, y, w, h)
+            }
+            _ => {}
         }
+        Ok(())
     }
 
-    fn hide_dropdown(&self) {
+    fn hide_dropdown(&self) -> Result<(), jfn_platform_abi::MenuHideError> {
         match self.dropdown() {
-            MenuDelivery::Host(host) => host.hide(),
-            MenuDelivery::Composited => self.surface().popup_hide(),
-            MenuDelivery::Page => {}
+            MenuDelivery::Host(host) => {
+                let handle = self.popup.lock().menu.take();
+                handle.map_or(Ok(()), |handle| host.hide(handle))
+            }
+            MenuDelivery::Composited => {
+                self.surface().popup_hide();
+                Ok(())
+            }
+            MenuDelivery::Page => Ok(()),
         }
     }
 
@@ -148,7 +230,17 @@ impl Inner {
         if !was_visible {
             return;
         }
-        self.hide_dropdown();
+        Self::report_hide(self.hide_dropdown());
+    }
+
+    fn report_hide(hidden: Result<(), jfn_platform_abi::MenuHideError>) {
+        if let Err(e) = hidden {
+            jfn_logging::log(
+                jfn_logging::Category::Cef,
+                jfn_logging::Level::Error,
+                &format!("dropdown menu hide: {e}"),
+            );
+        }
     }
 
     pub(super) fn popup_rect(&self) -> (i32, i32) {

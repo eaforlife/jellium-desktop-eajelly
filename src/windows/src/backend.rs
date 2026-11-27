@@ -177,7 +177,8 @@ fn win_open_external_url(url: &str) {
 }
 
 use jfn_platform_abi::{
-    IdleInhibitLevel, MenuDelivery, MenuKind, OnText, SurfaceHandle, WindowGeometry, WindowPos,
+    IdleInhibitLevel, MenuDelivery, MenuKind, OnText, PlacedGeometry, SurfaceHandle,
+    WindowGeometry, WindowPlacement, WindowPos,
 };
 
 /// SMTC-backed [`jfn_platform_abi::MediaSink`].
@@ -224,13 +225,21 @@ impl Platform for WindowsPlatform {
         win_init(mpv)
     }
 
-    fn cleanup(&self, _access: &jfn_platform_abi::LifecycleAccess) {
-        win_cleanup();
+    fn cleanup(
+        &self,
+        _access: &jfn_platform_abi::LifecycleAccess,
+    ) -> Result<(), jfn_platform_abi::DetachError> {
+        win_cleanup().map_err(|e| jfn_platform_abi::DetachError::new("Windows cleanup", e))
     }
 
     // mpv's window is gone by the time this runs and the compositor devices
     // are already released
-    fn post_window_cleanup(&self, _access: &jfn_platform_abi::LifecycleAccess) {}
+    fn post_window_cleanup(
+        &self,
+        _access: &jfn_platform_abi::LifecycleAccess,
+    ) -> Result<(), jfn_platform_abi::HostReleaseError> {
+        Ok(())
+    }
 
     fn window_decoration_options(&self) -> jfn_platform_abi::DecorationOptions {
         jfn_platform_abi::DecorationOptions::all()
@@ -259,7 +268,11 @@ impl Platform for WindowsPlatform {
         true
     }
 
-    fn alloc_surface(&self, initial: Visibility) -> SurfaceHandle {
+    fn alloc_surface(
+        &self,
+        initial: Visibility,
+        _placement: jfn_platform_abi::SurfacePlacement,
+    ) -> SurfaceHandle {
         let s = crate::render::alloc();
         crate::render::set_visibility(s, initial).acknowledged();
         s
@@ -289,14 +302,18 @@ impl Platform for WindowsPlatform {
         crate::render::set_visibility(s, visibility)
     }
 
-    fn apply_stack(&self, ordered: &[SurfaceHandle]) {
-        crate::render::apply_stack(ordered);
+    fn apply_stack(&self, ordered: &[SurfaceHandle]) -> Result<(), jfn_platform_abi::StackError> {
+        crate::render::apply_stack(ordered)
+            .map_err(|e| jfn_platform_abi::StackError::new("Windows restack AddVisual", e))
     }
 
     fn menu_delivery(&self, kind: MenuKind) -> MenuDelivery<'_> {
         match kind {
             MenuKind::ContextMenu => MenuDelivery::Host(&crate::menu::WinMenuHost),
-            MenuKind::Dropdown => MenuDelivery::Composited,
+            // CEF dismisses the OSR <select> popup within milliseconds of
+            // OnPopupShow, before painting it, so a composited popup never
+            // shows; the page menu sets the <select> directly
+            MenuKind::Dropdown => MenuDelivery::Page,
         }
     }
 
@@ -312,17 +329,22 @@ impl Platform for WindowsPlatform {
         &SmtcSink
     }
 
-    fn cef_paths(&self) -> jfn_platform_abi::CefPaths {
-        let exe = std::env::current_exe()
-            .and_then(std::fs::canonicalize)
-            .unwrap_or_default();
-        let dir = exe.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-        jfn_platform_abi::CefPaths {
+    fn cef_paths(&self) -> std::io::Result<jfn_platform_abi::CefPaths> {
+        let exe = std::env::current_exe().and_then(std::fs::canonicalize)?;
+        let dir = exe
+            .parent()
+            .ok_or_else(|| std::io::Error::other("the executable path has no parent"))?
+            .to_path_buf();
+        Ok(jfn_platform_abi::CefPaths {
             browser_subprocess_path: Some(exe),
             resources_dir_path: Some(dir.clone()),
             locales_dir_path: Some(dir.join("locales")),
             ..Default::default()
-        }
+        })
+    }
+
+    fn on_window_handle_changed(&self, id: i64) {
+        crate::platform::win_on_window_handle_changed(id);
     }
 
     fn set_fullscreen(&self, v: bool) {
@@ -355,7 +377,7 @@ impl Platform for WindowsPlatform {
         None
     }
 
-    fn scale(&self) -> jfn_platform_abi::Scale {
+    fn scale(&self) -> Result<jfn_platform_abi::Scale, jfn_platform_abi::WindowStateError> {
         win_get_scale()
     }
 
@@ -368,15 +390,17 @@ impl Platform for WindowsPlatform {
         jfn_platform_abi::WindowOwner::Mpv(&crate::window::WIN_WINDOW_SOURCE)
     }
 
-    fn query_window_position(&self) -> Option<WindowPos> {
-        crate::window::snapshot()?.position
+    fn window_position(
+        &self,
+    ) -> Result<Option<WindowPlacement>, jfn_platform_abi::WindowStateError> {
+        Ok(Some(crate::window::stored_window_placement()?))
     }
 
-    fn clamp_window_geometry(&self, g: WindowGeometry) -> WindowGeometry {
-        let (mut w, mut h) = (g.w, g.h);
-        let (mut x, mut y) = g.raw_position();
-        win_clamp_window_geometry(&mut w, &mut h, &mut x, &mut y);
-        WindowGeometry::from_raw(w, h, x, y)
+    fn clamp_window_geometry(
+        &self,
+        g: &WindowGeometry,
+    ) -> Result<PlacedGeometry, jfn_platform_abi::geometry::ClampError> {
+        win_clamp_window_geometry(g)
     }
 
     fn pump(&self) {

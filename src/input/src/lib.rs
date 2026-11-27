@@ -2,8 +2,8 @@
 //! whichever consumer [`route`] names — jellyfin-web's CEF layer or the shell
 //! overlay.
 
-use jfn_platform_abi::LogicalPoint;
 use jfn_platform_abi::event_flags::EVENTFLAG_PRECISION_SCROLLING_DELTA;
+use jfn_platform_abi::{WebPoint, WindowBasis, WindowPoint, WindowState, WindowStateError};
 use jfn_playback::hotkey::jfn_hotkey_classify_keydown;
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 use std::os::raw::c_int;
@@ -15,16 +15,38 @@ pub mod route;
 pub mod scroll;
 pub mod sink;
 pub mod text;
+pub mod touch;
 
-pub use route::{ShellHit, ShellState, Target};
+pub use route::{Routing, ShellHit, ShellState, Target};
 pub use sink::{
-    EditCommand, FieldEdit, ShellInput, ShellStateSubscription, WebInput, field_edit,
-    install_shell, install_web, on_shell_state_scoped, publish_field_edit, publish_shell_state,
-    shell_state, web_became_live,
+    EditCommand, FieldEdit, ShellInput, WebInput, field_edit, install_shell, install_web,
+    publish_field_edit, publish_shell_state, shell_state, web_became_live,
 };
+pub use touch::TouchPhase;
 
-use route::{is_text, route_key, route_pointer, to_web_point};
+use route::{from_web_point, is_text, route_key, route_pointer, to_web_point};
 use sink::{with_shell, with_web};
+
+fn window_state_for_event() -> Result<WindowState, WindowStateError> {
+    let lease = jfn_platform_abi::try_lease().ok_or(WindowStateError::NoPlatform)?;
+    lease.platform().window_owner().source().window_state()
+}
+
+fn report_window_state(e: &WindowStateError) {
+    match e {
+        WindowStateError::NoWindow
+        | WindowStateError::WebOffsetUnstated
+        | WindowStateError::NoPlatform => {
+            tracing::trace!(target: "Main", "input: window state: {e}");
+        }
+        e => tracing::error!(target: "Main", "input: window state: {e}"),
+    }
+}
+
+pub fn web_to_window_point(p: WebPoint) -> Result<(WindowPoint, WindowBasis), WindowStateError> {
+    let state = window_state_for_event()?;
+    Ok((from_web_point(p, state.web_top), state.basis))
+}
 
 const KEYEVENT_RAWKEYDOWN: c_int = 0;
 const KEYEVENT_KEYUP: c_int = 2;
@@ -42,17 +64,33 @@ fn cef_button(button_code: u32) -> Option<c_int> {
     }
 }
 
-/// The published routing state, or `Target::None` when the shell overlay has
-/// published none: with no state there is no window size and no reserved strip
-/// to invent, so the event reaches nobody.
-fn target_for_pointer(p: LogicalPoint) -> (Target, Option<ShellState>) {
-    let Some(state) = sink::shell_state() else {
-        cursor::set_owner(Target::None);
-        return (Target::None, None);
+fn routing() -> Result<Option<Routing>, WindowStateError> {
+    let Some(shell) = sink::shell_state() else {
+        return Ok(None);
     };
-    let target = route_pointer(state, p);
+    let state = window_state_for_event()?;
+    Ok(Some(Routing {
+        shell,
+        window: state.extent.logical(),
+        web_top: state.web_top,
+    }))
+}
+
+fn target_for_pointer(p: WindowPoint) -> Result<(Target, Option<Routing>), WindowStateError> {
+    let routing = match routing() {
+        Ok(Some(routing)) => routing,
+        Ok(None) => {
+            cursor::set_owner(Target::None);
+            return Ok((Target::None, None));
+        }
+        Err(e) => {
+            cursor::set_owner(Target::None);
+            return Err(e);
+        }
+    };
+    let target = route_pointer(routing, p);
     cursor::set_owner(target);
-    (target, Some(state))
+    Ok((target, Some(routing)))
 }
 
 /// The routing target for a key, or `Target::None` with no published state.
@@ -60,17 +98,75 @@ fn target_for_key() -> Target {
     sink::shell_state().map_or(Target::None, route_key)
 }
 
-pub fn jfn_input_dispatch_mouse_move(x: i32, y: i32, mods: u32, leave: c_int) {
-    let p = LogicalPoint { x, y };
-    let (target, state) = target_for_pointer(p);
-    match (target, state) {
-        (Target::Shell, _) => with_shell(|s| s.send_mouse_move(p, mods, leave != 0)),
-        (Target::Web, Some(state)) => {
-            let w = to_web_point(p, state);
-            with_web(|b| b.send_mouse_move(w.x, w.y, mods, leave != 0));
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryDirection {
+    Back,
+    Forward,
+}
+
+#[derive(Debug, Default)]
+pub struct PointerFocus {
+    hovered: Option<Target>,
+}
+
+impl PointerFocus {
+    pub const fn new() -> Self {
+        Self { hovered: None }
+    }
+}
+
+fn send_mouse_leave(target: Target, routing: Option<Routing>, p: WindowPoint, mods: u32) {
+    match (target, routing) {
+        (Target::Shell, _) => with_shell(|s| s.send_mouse_leave(p, mods)),
+        (Target::Web, Some(routing)) => {
+            let w = to_web_point(p, routing.web_top);
+            with_web(|b| b.send_mouse_leave(w, mods));
         }
         _ => {}
     }
+}
+
+pub fn jfn_input_dispatch_mouse_move(focus: &mut PointerFocus, p: WindowPoint, mods: u32) {
+    let (target, routing) = match target_for_pointer(p) {
+        Ok(routed) => routed,
+        Err(e) => {
+            report_window_state(&e);
+            return;
+        }
+    };
+    let entered = match target {
+        Target::None => None,
+        target => Some(target),
+    };
+    let left = focus.hovered;
+    if let Some(left) = left
+        && Some(left) != entered
+    {
+        send_mouse_leave(left, routing, p, mods);
+    }
+    match (target, routing) {
+        (Target::Shell, _) => with_shell(|s| s.send_mouse_move(p, mods)),
+        (Target::Web, Some(routing)) => {
+            let w = to_web_point(p, routing.web_top);
+            with_web(|b| b.send_mouse_move(w, mods));
+        }
+        _ => {}
+    }
+    focus.hovered = entered;
+}
+
+pub fn jfn_input_dispatch_mouse_leave(focus: &mut PointerFocus, p: WindowPoint, mods: u32) {
+    let Some(left) = focus.hovered.take() else {
+        return;
+    };
+    let routing = match routing() {
+        Ok(routing) => routing,
+        Err(e) => {
+            report_window_state(&e);
+            None
+        }
+    };
+    send_mouse_leave(left, routing, p, mods);
 }
 
 /// A right press routed to [`Target::Shell`] calls
@@ -80,27 +176,33 @@ pub fn jfn_input_dispatch_mouse_move(x: i32, y: i32, mods: u32, leave: c_int) {
 pub fn jfn_input_dispatch_mouse_button(
     button_code: u32,
     pressed: c_int,
-    x: i32,
-    y: i32,
+    p: WindowPoint,
     mods: u32,
 ) {
     let Some(btn) = cef_button(button_code) else {
         return;
     };
-    let p = LogicalPoint { x, y };
-    let Some(state) = sink::shell_state() else {
-        cursor::set_owner(Target::None);
-        return;
+    let routing = match routing() {
+        Ok(Some(routing)) => routing,
+        Ok(None) => {
+            cursor::set_owner(Target::None);
+            return;
+        }
+        Err(e) => {
+            cursor::set_owner(Target::None);
+            report_window_state(&e);
+            return;
+        }
     };
-    let hit = route::hit(state, p);
+    let hit = route::hit(routing, p);
     let target = match hit {
         ShellHit::Miss => Target::Web,
         _ => Target::Shell,
     };
     cursor::set_owner(target);
     if target == Target::Web {
-        let w = to_web_point(p, state);
-        with_web(|b| b.send_mouse_click(w.x, w.y, mods, btn, pressed == 0, 1));
+        let w = to_web_point(p, routing.web_top);
+        with_web(|b| b.send_mouse_click(w, mods, btn, pressed == 0, 1));
         return;
     }
     if pressed != 0 && btn == MBT_RIGHT {
@@ -120,14 +222,17 @@ pub fn jfn_input_dispatch_mouse_button(
     with_shell(|s| s.send_mouse_click(p, mods, btn, pressed == 0, 1));
 }
 
-pub fn jfn_input_dispatch_scroll(x: i32, y: i32, dx: i32, dy: i32, mods: u32) {
-    dispatch_scroll(x, y, dx, dy, mods);
+pub fn jfn_input_dispatch_pointer_cancel() {
+    with_shell(|s| s.pointer_cancel());
+    with_web(|b| b.capture_lost());
 }
 
-/// Variant that lets the caller flag a precision (trackpad) delta.
+pub fn jfn_input_dispatch_scroll(p: WindowPoint, dx: i32, dy: i32, mods: u32) {
+    dispatch_scroll(p, dx, dy, mods);
+}
+
 pub fn jfn_input_dispatch_scroll_precise(
-    x: i32,
-    y: i32,
+    p: WindowPoint,
     dx: i32,
     dy: i32,
     mods: u32,
@@ -138,26 +243,67 @@ pub fn jfn_input_dispatch_scroll_precise(
     } else {
         mods
     };
-    dispatch_scroll(x, y, dx, dy, mods);
+    dispatch_scroll(p, dx, dy, mods);
 }
 
-fn dispatch_scroll(x: i32, y: i32, dx: i32, dy: i32, mods: u32) {
-    let p = LogicalPoint { x, y };
-    let (target, state) = target_for_pointer(p);
-    match (target, state) {
-        (Target::Shell, _) => with_shell(|s| s.send_mouse_wheel(p, mods, dx, dy)),
-        (Target::Web, Some(state)) => {
-            let w = to_web_point(p, state);
-            with_web(|b| b.send_mouse_wheel(w.x, w.y, mods, dx, dy));
+fn dispatch_scroll(p: WindowPoint, dx: i32, dy: i32, mods: u32) {
+    match target_for_pointer(p) {
+        Ok((Target::Shell, _)) => with_shell(|s| s.send_mouse_wheel(p, mods, dx, dy)),
+        Ok((Target::Web, Some(routing))) => {
+            let w = to_web_point(p, routing.web_top);
+            with_web(|b| b.send_mouse_wheel(w, mods, dx, dy));
         }
-        _ => {}
+        Ok(_) => {}
+        Err(e) => report_window_state(&e),
+    }
+}
+
+static TOUCHES: parking_lot::Mutex<touch::Touches> = parking_lot::Mutex::new(touch::Touches::new());
+
+pub fn jfn_input_dispatch_touch(id: i32, phase: TouchPhase, p: WindowPoint, mods: u32) {
+    let routing = match routing() {
+        Ok(routing) => routing,
+        Err(e) => {
+            report_window_state(&e);
+            None
+        }
+    };
+    let delivery = TOUCHES
+        .lock()
+        .route(id, phase, routing.map(|routing| route::hit(routing, p)));
+    match delivery {
+        touch::Delivery::Web(phase) => {
+            let Some(routing) = routing else {
+                return;
+            };
+            let w = to_web_point(p, routing.web_top);
+            with_web(|b| b.send_touch_event(id, w, mods, phase));
+        }
+        touch::Delivery::ShellButton(phase) => with_shell(|s| match phase {
+            TouchPhase::Pressed => {
+                s.send_mouse_move(p, mods);
+                s.send_mouse_click(p, mods, MBT_LEFT, false, 1);
+            }
+            TouchPhase::Moved => s.send_mouse_move(p, mods),
+            // No cursor stays behind a lifted finger to hover anything.
+            TouchPhase::Released => {
+                s.send_mouse_click(p, mods, MBT_LEFT, true, 1);
+                s.send_mouse_leave(p, mods);
+            }
+            TouchPhase::Cancelled => s.cancel_press(MBT_LEFT),
+        }),
+        touch::Delivery::WindowGesture(hit) => with_shell(|s| s.window_gesture(hit)),
+        touch::Delivery::Drop => {}
     }
 }
 
 /// Routed like a key: dropped while a modal owns input.
-pub fn jfn_input_dispatch_history_nav(forward: c_int) {
+pub fn jfn_input_dispatch_history_nav(direction: HistoryDirection) {
     if target_for_key() == Target::Web {
-        with_web(|b| b.navigate_history(forward != 0));
+        with_web(|b| match direction {
+            HistoryDirection::Back => b.go_back(),
+            HistoryDirection::Forward => b.go_forward(),
+        });
     }
 }
 

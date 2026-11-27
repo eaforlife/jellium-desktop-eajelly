@@ -8,9 +8,12 @@ name: build-macos-legacy
 
 on:
   workflow_dispatch:
+  pull_request:
   push:
+    branches:
+      - main
     tags:
-      - 'v*.*.*-eajelly*'
+      - 'v*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -31,7 +34,7 @@ jobs:
 
       - name: Determine version
         id: version
-        run: echo "version=$(cargo xtask version)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(cargo run --quiet --manifest-path src/xtask/Cargo.toml -- version)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: |
@@ -54,7 +57,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/jellyfin-deps
-          key: deps-x86_64-ffmpeg-n8.1-libplacebo-v7.360.1-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-v2
+          key: deps-x86_64-ffmpeg-n8.1-libplacebo-v7.387.0-macos${{ env.MACOSX_DEPLOYMENT_TARGET }}-v2
 
       - name: Build ffmpeg from source
         if: steps.deps-cache.outputs.cache-hit != 'true'
@@ -78,7 +81,7 @@ jobs:
       - name: Build libplacebo from source
         if: steps.deps-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --recursive --branch v7.360.1 https://github.com/haasn/libplacebo.git /tmp/libplacebo-src
+          git clone --depth 1 --recursive --branch v7.387.0 https://code.videolan.org/videolan/libplacebo.git /tmp/libplacebo-src
           cd /tmp/libplacebo-src
           # Fix Python 3.14 compatibility: ElementTree constructor no longer
           # accepts an ElementTree object, only Element. Known upstream issue
@@ -136,13 +139,13 @@ jobs:
       - name: Create DMG
         run: |
           brew install create-dmg
-          APP_NAME="Jellium Desktop - EAJelly"
+          APP_NAME="Jellium Desktop"
           VERSION="${{ steps.version.outputs.version }}"
           DMG_NAME="JelliumDesktop-${VERSION}-macos-12-x86_64.dmg"
           mkdir -p dist
 
           create-dmg \
-            --volname "Jellium Desktop - EAJelly v${VERSION}" \
+            --volname "Jellium Desktop v${VERSION}" \
             --no-internet-enable \
             --window-size 500 300 \
             --icon-size 100 \

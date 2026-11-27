@@ -1,6 +1,10 @@
 //! Input and navigation operations on the browser the web overlay drives.
 
-use cef::{ImplBrowser, ImplBrowserHost, KeyEvent, MouseButtonType, MouseEvent, sys};
+use cef::{
+    ImplBrowser, ImplBrowserHost, KeyEvent, MouseButtonType, MouseEvent, PointerType, TouchEvent,
+    TouchEventType, sys,
+};
+use jfn_input::TouchPhase;
 use std::os::raw::c_int;
 
 use super::Inner;
@@ -83,12 +87,26 @@ impl Inner {
         );
     }
 
-    pub(crate) fn send_mouse_move(&self, x: c_int, y: c_int, modifiers: u32, leave: bool) {
+    pub(crate) fn send_mouse_move(&self, x: c_int, y: c_int, modifiers: u32) {
         let Some(host) = self.host() else {
             return;
         };
         let me = MouseEvent { x, y, modifiers };
-        host.send_mouse_move_event(Some(&me), if leave { 1 } else { 0 });
+        host.send_mouse_move_event(Some(&me), 0);
+    }
+
+    pub(crate) fn send_mouse_leave(&self, x: c_int, y: c_int, modifiers: u32) {
+        let Some(host) = self.host() else {
+            return;
+        };
+        let me = MouseEvent { x, y, modifiers };
+        host.send_mouse_move_event(Some(&me), 1);
+    }
+
+    pub(crate) fn send_capture_lost(&self) {
+        if let Some(host) = self.host() {
+            host.send_capture_lost_event();
+        }
     }
 
     pub(crate) fn send_mouse_wheel(
@@ -104,5 +122,35 @@ impl Inner {
         };
         let me = MouseEvent { x, y, modifiers };
         host.send_mouse_wheel_event(Some(&me), dx, dy);
+    }
+
+    /// Contact shape, rotation and pressure are not forwarded and stay zero.
+    pub(crate) fn send_touch_event(
+        &self,
+        id: c_int,
+        x: f32,
+        y: f32,
+        modifiers: u32,
+        phase: TouchPhase,
+    ) {
+        let Some(host) = self.host() else {
+            return;
+        };
+        let type_ = match phase {
+            TouchPhase::Pressed => sys::cef_touch_event_type_t::CEF_TET_PRESSED,
+            TouchPhase::Moved => sys::cef_touch_event_type_t::CEF_TET_MOVED,
+            TouchPhase::Released => sys::cef_touch_event_type_t::CEF_TET_RELEASED,
+            TouchPhase::Cancelled => sys::cef_touch_event_type_t::CEF_TET_CANCELLED,
+        };
+        let ev = TouchEvent {
+            id,
+            x,
+            y,
+            type_: TouchEventType::from(type_),
+            modifiers,
+            pointer_type: PointerType::from(sys::cef_pointer_type_t::CEF_POINTER_TYPE_TOUCH),
+            ..TouchEvent::default()
+        };
+        host.send_touch_event(Some(&ev));
     }
 }

@@ -31,7 +31,8 @@ use std::ffi::c_int;
 
 use jfn_gpu_paint::{FrameSize, Pixels, WindowTarget};
 use jfn_platform_abi::{
-    Ack, Content, PaintFrame, Presented, SurfaceHandle, SurfaceSize, Visibility, VisibilityCommit,
+    Ack, Content, PaintFrame, Presented, SurfaceHandle, SurfaceSize, Unrepresentable, Visibility,
+    VisibilityCommit, WindowStateError,
 };
 use parking_lot::Mutex;
 use windows::Win32::Foundation::HWND;
@@ -172,6 +173,15 @@ pub(crate) fn init(hwnd: HWND) -> Result<(), jfn_platform_abi::PlatformInitError
     Ok(())
 }
 
+/// Point the composition target at a replacement mpv VO window. The visual
+/// tree and surfaces are kept; only the HWND target is recreated.
+pub(crate) fn rebind(hwnd: HWND) -> windows_core::Result<()> {
+    if let Some(devices) = STATE.lock().devices.as_mut() {
+        devices.rebind(hwnd)?;
+    }
+    Ok(())
+}
+
 /// Drop every remaining surface, then the devices. Runs after the WndProc
 /// hook is unhooked and the input thread is joined.
 pub(crate) fn cleanup() {
@@ -228,7 +238,11 @@ pub(crate) fn free(h: SurfaceHandle) {
 /// detached entry is intentionally absent from the DComp tree until it is
 /// shown again, which prevents a previously presented frame from surviving a
 /// modal close.
-fn apply_attached_stack(root: &IDCompositionVisual, entries: &[Entry]) {
+fn apply_attached_stack(
+    root: &IDCompositionVisual,
+    entries: &[Entry],
+) -> windows::core::Result<()> {
+    let mut first_failure = None;
     unsafe {
         for entry in entries {
             let _ = root.RemoveVisual(entry.content.visual());
@@ -243,24 +257,25 @@ fn apply_attached_stack(root: &IDCompositionVisual, entries: &[Entry]) {
             match placed {
                 Ok(()) => prev = Some(visual),
                 Err(e) => {
-                    tracing::error!(target: "platform", "apply_stack AddVisual failed: {e:?}");
+                    first_failure.get_or_insert(e);
                 }
             }
         }
     }
+    first_failure.map_or(Ok(()), Err)
 }
 
 /// Apply the whole z-order to the root's children, bottom-to-top. Live
 /// surfaces `ordered` does not name keep their relative order above those it
-/// does. Video needs no placing: the composition target is mpv's own HWND, so
-/// every attached visual is above it.
-pub(crate) fn apply_stack(ordered: &[SurfaceHandle]) {
+/// does, so every live surface stays parented. Video needs no placing: the
+/// composition target is mpv's own HWND, so every visual is above it.
+pub(crate) fn apply_stack(ordered: &[SurfaceHandle]) -> windows::core::Result<()> {
     let mut st = STATE.lock();
     let Registry {
         devices, surfaces, ..
     } = &mut *st;
     let Some(root) = devices.as_ref().map(Devices::root) else {
-        return;
+        return Ok(());
     };
     let rank = |e: &Entry| ordered.iter().position(|h| h.id() == e.id.0);
 
@@ -271,8 +286,9 @@ pub(crate) fn apply_stack(ordered: &[SurfaceHandle]) {
     named.append(&mut unnamed);
 
     *surfaces = named;
-    apply_attached_stack(root, surfaces);
+    let result = apply_attached_stack(root, surfaces);
     st.commit();
+    result
 }
 
 /// Set a surface's content visual to `visibility`, attach or detach it from
@@ -294,8 +310,8 @@ pub(crate) fn set_visibility(h: SurfaceHandle, visibility: Visibility) -> Visibi
         entry.attached = shown;
         entry.content.set_visible(shown);
     }
-    if changed {
-        apply_attached_stack(root, surfaces);
+    if changed && let Err(error) = apply_attached_stack(root, surfaces) {
+        tracing::error!(target: "platform", "apply_stack failed: {error:?}");
     }
     st.commit_and_wait();
     VisibilityCommit::issued(visibility, Ack::immediate())
@@ -359,13 +375,12 @@ pub(crate) fn present<'a>(
     Ok(frame.present(|_content| Presented::issued()))
 }
 
-/// Offsets the content visual by the reserved top inset and sizes it to match.
-pub(crate) fn resize(h: SurfaceHandle, size: SurfaceSize) {
+pub(crate) fn resize(h: SurfaceHandle, _size: SurfaceSize) {
     let mut st = STATE.lock();
     let Some(entry) = st.find_mut(h) else {
         return;
     };
-    entry.content.set_offset(0.0, size.physical_top as f32);
+    entry.content.set_offset(0.0, 0.0);
     st.commit();
 }
 
@@ -378,20 +393,27 @@ pub(crate) fn window_target(h: SurfaceHandle) -> Option<WindowTarget> {
     st.find_mut(h)?.content.window_target()
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, thiserror::Error)]
+pub(crate) enum PopupPlaceError {
+    #[error(transparent)]
+    Scale(#[from] WindowStateError),
+    #[error(transparent)]
+    Offset(#[from] Unrepresentable),
+}
+
 /// Place the popup visual at `x`, `y` — logical pixels inside the owning
 /// surface. The popup shows itself with its first frame.
-pub(crate) fn popup_show(h: SurfaceHandle, x: c_int, y: c_int) {
-    let scale = crate::platform::win_get_scale();
-    let (Some(px), Some(py)) = (scale.to_physical(x), scale.to_physical(y)) else {
-        tracing::error!(target: "platform", "popup offset {x},{y} is unrepresentable at scale {scale}");
-        return;
-    };
+pub(crate) fn popup_show(h: SurfaceHandle, x: c_int, y: c_int) -> Result<(), PopupPlaceError> {
+    let scale = crate::platform::win_get_scale()?;
+    let px = scale.to_physical(x)?;
+    let py = scale.to_physical(y)?;
     let mut st = STATE.lock();
     let Some(entry) = st.find_mut(h) else {
-        return;
+        return Ok(());
     };
     entry.popup.set_offset(px as f32, py as f32);
     st.commit();
+    Ok(())
 }
 
 /// Detach the popup visual's content, so reopening it cannot flash the frame

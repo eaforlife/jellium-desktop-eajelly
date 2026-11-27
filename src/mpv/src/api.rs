@@ -311,6 +311,9 @@ pub fn jfn_mpv_wait_event(timeout: f64) -> *mut sys::mpv_event {
     unsafe { sys::mpv_wait_event(h, timeout) }
 }
 
+pub const NO_WAIT: f64 = 0.0;
+pub const WAIT_FOREVER: f64 = -1.0;
+
 /// A missing handle and `MPV_EVENT_NONE` both collapse to [`WaitEvent::None`].
 pub fn wait_event_owned(timeout: f64) -> WaitEvent {
     let ev = jfn_mpv_wait_event(timeout);
@@ -668,4 +671,31 @@ pub unsafe fn jfn_mpv_set_background_color_hex(hex: *const c_char) {
         return;
     };
     unsafe { set_str(c"background-color", h) };
+}
+
+/// Reply id carried by the [`crate::Event::SetPropertyReply`] answering
+/// [`jfn_mpv_set_startup_background_color_hex`].
+pub const STARTUP_BACKGROUND_SET_REPLY: crate::event::ReplyUserdata = 2;
+
+/// Async `background-color` write; mpv answers with a `SetPropertyReply`
+/// tagged [`STARTUP_BACKGROUND_SET_REPLY`] once it has been applied. Returns
+/// `false` when nothing was queued, so no reply will follow.
+pub unsafe fn jfn_mpv_set_startup_background_color_hex(hex: *const c_char) -> bool {
+    let h = raw();
+    let Some(v) = (unsafe { cstr(hex) }) else {
+        return false;
+    };
+    if h.is_null() {
+        return false;
+    }
+    let mut ptr = v.as_ptr();
+    unsafe {
+        sys::mpv_set_property_async(
+            h,
+            STARTUP_BACKGROUND_SET_REPLY,
+            c"background-color".as_ptr(),
+            sys::mpv_format::MPV_FORMAT_STRING,
+            &mut ptr as *mut _ as *mut c_void,
+        ) >= 0
+    }
 }

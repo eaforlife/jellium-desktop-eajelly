@@ -4,6 +4,8 @@ use std::ffi::{c_int, c_void};
 use std::sync::atomic::Ordering;
 
 use objc2::MainThreadMarker;
+use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString, NSScreen, NSWorkspace};
 use objc2_core_foundation::{CFRunLoop, CFString, kCFRunLoopDefaultMode};
 use objc2_foundation::{NSDefaultRunLoopMode, NSString, NSURL};
@@ -12,7 +14,10 @@ use objc2_io_kit::{
     kIOReturnSuccess,
 };
 
-use jfn_platform_abi::geometry::{Bounds, clamp_to_bounds};
+use jfn_platform_abi::geometry::{
+    Bounds, ClampError, MpvScreen, PlacedGeometry, ScreenName, TargetScreen, WindowPlacement,
+    clamp_to_screen,
+};
 pub use jfn_platform_abi::{
     Content, DisplayBackend, JfnRect, PaintFrame, Platform, Presented, Visibility,
     VisibilityCommit, WindowDecorations,
@@ -28,6 +33,8 @@ pub use jfn_platform_abi::{
 // Rust-side (see src/macos/src/init.rs).
 use crate::dispatch::{post_to_main, run_on_main_async, wake_main_queue};
 use crate::init::{jfn_macos_apply_theme_color_on_main, jfn_macos_get_window};
+use crate::screen::{DisplaySerialNumber, ScreenIdentity};
+use jfn_platform_abi::{PointsToPixelsError, points_to_pixels};
 
 /// Tint AppKit fills behind mpv's CAMetalLayer / NSWindow root so the
 /// resize-gap stale-texture window (which CLAUDE.md explicitly accepts
@@ -99,37 +106,58 @@ pub fn macos_scale() -> Scale {
     macos_display_scale()
 }
 
-/// Query the saved window position in backing pixels, relative to the
-/// screen's visible frame (excluding menu bar / dock), Y measured from
-/// the top. Lossless round-trip with mpv's `--geometry +X+Y`.
-pub fn macos_query_window_position(x: &mut c_int, y: &mut c_int) -> bool {
+pub fn macos_window_position() -> Result<Option<WindowPlacement>, PointsToPixelsError> {
     unsafe {
         let win = jfn_macos_get_window();
         if win.is_null() {
-            return false;
+            return Ok(None);
         }
-        let screen: *mut objc2::runtime::AnyObject = objc2::msg_send![win, screen];
-        if screen.is_null() {
-            return false;
-        }
+        let screen: Option<Retained<NSScreen>> = objc2::msg_send![win, screen];
+        let Some(screen) = screen else {
+            return Ok(None);
+        };
         let frame: objc2_foundation::NSRect = objc2::msg_send![win, frame];
-        let visible: objc2_foundation::NSRect = objc2::msg_send![screen, visibleFrame];
-        let scale = crate::scale::report_backing(
-            "window screen",
-            Some(objc2::msg_send![screen, backingScaleFactor]),
-        );
+        let visible = screen.visibleFrame();
+        let scale =
+            crate::scale::report_backing("window screen", Some(screen.backingScaleFactor()));
         let lx = frame.origin.x - visible.origin.x;
         let ly = (visible.origin.y + visible.size.height) - (frame.origin.y + frame.size.height);
-        let (Some(px), Some(py)) = (
-            crate::scale::to_backing(scale, lx),
-            crate::scale::to_backing(scale, ly),
-        ) else {
-            return false;
-        };
-        *x = px;
-        *y = py;
-        true
+        Ok(Some(WindowPlacement::new(
+            screen_unique_name(&screen),
+            WindowPos {
+                x: points_to_pixels(scale, lx)?,
+                y: points_to_pixels(scale, ly)?,
+            },
+        )))
     }
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGDisplaySerialNumber(display: u32) -> u32;
+}
+
+fn screen_unique_name(screen: &NSScreen) -> Option<ScreenName> {
+    let localized: Retained<NSString> = unsafe { objc2::msg_send![screen, localizedName] };
+    let description: Retained<AnyObject> = unsafe { objc2::msg_send![screen, deviceDescription] };
+    let key = NSString::from_str("NSScreenNumber");
+    let number: Option<Retained<AnyObject>> =
+        unsafe { objc2::msg_send![&*description, objectForKey: &*key] };
+    let display: u32 = match number {
+        Some(number) => unsafe { objc2::msg_send![&*number, unsignedIntValue] },
+        None => 0,
+    };
+    let serial = DisplaySerialNumber(unsafe { CGDisplaySerialNumber(display) });
+    ScreenIdentity::parse(&localized.to_string(), serial).unique_name()
+}
+
+fn visible_bounds(screen: &NSScreen, source: &str) -> Result<Bounds, PointsToPixelsError> {
+    let visible = screen.visibleFrame();
+    let scale = crate::scale::report_backing(source, Some(screen.backingScaleFactor()));
+    Ok(Bounds {
+        w: points_to_pixels(scale, visible.size.width)?,
+        h: points_to_pixels(scale, visible.size.height)?,
+    })
 }
 
 /// Backing scale factor of the main screen. A saved position in backing
@@ -144,31 +172,29 @@ pub fn macos_display_scale() -> Scale {
     )
 }
 
-/// Clamp the saved (w, h, x, y) window geometry — in backing pixels,
-/// relative to the main screen's visible frame — so the window stays
-/// fully on-screen. Centers any unset axis (negative input).
-pub fn macos_clamp_window_geometry(w: &mut c_int, h: &mut c_int, x: &mut c_int, y: &mut c_int) {
+pub fn macos_clamp_window_geometry(g: &WindowGeometry) -> Result<PlacedGeometry, ClampError> {
     // SAFETY: this entry point runs on the AppKit main thread.
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
-    let Some(screen) = NSScreen::mainScreen(mtm) else {
-        return;
-    };
-    let visible = screen.visibleFrame();
-    let scale = crate::scale::report_backing("main screen", Some(screen.backingScaleFactor()));
-    let (Some(vw), Some(vh)) = (
-        crate::scale::to_backing(scale, visible.size.width),
-        crate::scale::to_backing(scale, visible.size.height),
-    ) else {
-        tracing::error!(target: "Main", "visible frame {}x{} is unrepresentable at scale {scale}", visible.size.width, visible.size.height);
-        return;
-    };
-    let mut g = WindowGeometry::from_raw(*w, *h, *x, *y);
-    clamp_to_bounds(&mut g, Bounds { w: vw, h: vh });
-    *w = g.w;
-    *h = g.h;
-    let (nx, ny) = g.raw_position();
-    *x = nx;
-    *y = ny;
+    clamp_to_screen(
+        g,
+        |name| {
+            for screen in NSScreen::screens(mtm).iter() {
+                if screen_unique_name(&screen).as_ref() == Some(name) {
+                    return Ok(Some(TargetScreen {
+                        mpv: MpvScreen::Name(name.clone()),
+                        bounds: visible_bounds(&screen, "saved screen")?,
+                    }));
+                }
+            }
+            Ok(None)
+        },
+        || {
+            NSScreen::mainScreen(mtm)
+                .map(|screen| visible_bounds(&screen, "main screen"))
+                .transpose()
+                .map_err(ClampError::from)
+        },
+    )
 }
 
 // macos_early_init / macos_init / macos_cleanup + jfn_macos_get_input_view
@@ -479,13 +505,22 @@ impl Platform for MacosPlatform {
         macos_init(mpv)
     }
 
-    fn cleanup(&self, _access: &jfn_platform_abi::LifecycleAccess) {
+    fn cleanup(
+        &self,
+        _access: &jfn_platform_abi::LifecycleAccess,
+    ) -> Result<(), jfn_platform_abi::DetachError> {
         macos_cleanup();
+        Ok(())
     }
 
     // mpv's window is gone by the time this runs and AppKit owns nothing past
     // cleanup
-    fn post_window_cleanup(&self, _access: &jfn_platform_abi::LifecycleAccess) {}
+    fn post_window_cleanup(
+        &self,
+        _access: &jfn_platform_abi::LifecycleAccess,
+    ) -> Result<(), jfn_platform_abi::HostReleaseError> {
+        Ok(())
+    }
 
     fn window_decoration_options(&self) -> jfn_platform_abi::DecorationOptions {
         jfn_platform_abi::DecorationOptions::all()
@@ -519,7 +554,11 @@ impl Platform for MacosPlatform {
         true
     }
 
-    fn alloc_surface(&self, initial: Visibility) -> SurfaceHandle {
+    fn alloc_surface(
+        &self,
+        initial: Visibility,
+        _placement: jfn_platform_abi::SurfacePlacement,
+    ) -> SurfaceHandle {
         SurfaceHandle::from_ptr(macos_alloc_surface(initial))
     }
 
@@ -559,10 +598,11 @@ impl Platform for MacosPlatform {
         macos_set_surface_visibility(s.as_ptr(), visibility)
     }
 
-    fn apply_stack(&self, ordered: &[SurfaceHandle]) {
+    fn apply_stack(&self, ordered: &[SurfaceHandle]) -> Result<(), jfn_platform_abi::StackError> {
         // `SurfaceHandle` is `#[repr(transparent)]` over `*mut c_void`, so the
         // slice pointer reinterprets directly.
         macos_apply_stack(ordered.as_ptr() as *const *mut c_void, ordered.len());
+        Ok(())
     }
 
     fn menu_delivery(&self, _kind: MenuKind) -> MenuDelivery<'_> {
@@ -581,19 +621,20 @@ impl Platform for MacosPlatform {
         &NowPlayingSink
     }
 
-    fn cef_paths(&self) -> jfn_platform_abi::CefPaths {
-        let exe = std::env::current_exe()
-            .and_then(std::fs::canonicalize)
-            .unwrap_or_default();
-        let app_contents = exe.parent().and_then(|p| p.parent()).unwrap_or(&exe);
+    fn cef_paths(&self) -> std::io::Result<jfn_platform_abi::CefPaths> {
+        let exe = std::env::current_exe().and_then(std::fs::canonicalize)?;
+        let app_contents = exe
+            .parent()
+            .and_then(|p| p.parent())
+            .ok_or_else(|| std::io::Error::other("the executable is not inside an app bundle"))?;
         let framework = app_contents
             .join("Frameworks")
             .join("Chromium Embedded Framework.framework");
-        jfn_platform_abi::CefPaths {
+        Ok(jfn_platform_abi::CefPaths {
             framework_dir_path: Some(framework),
             browser_subprocess_path: Some(exe),
             ..Default::default()
-        }
+        })
     }
 
     fn set_fullscreen(&self, v: bool) {
@@ -613,8 +654,8 @@ impl Platform for MacosPlatform {
         None
     }
 
-    fn scale(&self) -> Scale {
-        macos_scale()
+    fn scale(&self) -> Result<Scale, jfn_platform_abi::WindowStateError> {
+        Ok(macos_scale())
     }
 
     fn display_scale(&self, at: Option<WindowPos>) -> Scale {
@@ -626,20 +667,17 @@ impl Platform for MacosPlatform {
         jfn_platform_abi::WindowOwner::Mpv(&jfn_playback::window_source::MPV_WINDOW_SOURCE)
     }
 
-    fn query_window_position(&self) -> Option<WindowPos> {
-        let (mut x, mut y) = (0, 0);
-        if macos_query_window_position(&mut x, &mut y) {
-            Some(WindowPos { x, y })
-        } else {
-            None
-        }
+    fn window_position(
+        &self,
+    ) -> Result<Option<WindowPlacement>, jfn_platform_abi::WindowStateError> {
+        Ok(macos_window_position()?)
     }
 
-    fn clamp_window_geometry(&self, g: WindowGeometry) -> WindowGeometry {
-        let (mut w, mut h) = (g.w, g.h);
-        let (mut x, mut y) = g.raw_position();
-        macos_clamp_window_geometry(&mut w, &mut h, &mut x, &mut y);
-        WindowGeometry::from_raw(w, h, x, y)
+    fn clamp_window_geometry(
+        &self,
+        g: &WindowGeometry,
+    ) -> Result<PlacedGeometry, jfn_platform_abi::geometry::ClampError> {
+        macos_clamp_window_geometry(g)
     }
 
     fn pump(&self) {

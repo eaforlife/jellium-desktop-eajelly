@@ -116,6 +116,7 @@ pacman -S --needed --noconfirm \
     $PkgPrefix-vulkan-loader \
     $PkgPrefix-shaderc \
     $PkgPrefix-spirv-cross \
+    $PkgPrefix-luajit \
     $PkgPrefix-llvm \
     $PkgPrefix-tools
 "@
@@ -157,8 +158,8 @@ if (-not (Test-Path (Join-Path $MesonBuildDir "build.ninja"))) {
 cd '$MsysMpvSource' && \
 meson setup build --default-library=shared \
     -Dlibmpv=true \
-    -Dcplayer=false \
-    -Dlua=disabled \
+    -Dcplayer=true \
+    -Dlua=luajit \
     -Djavascript=disabled \
     -Dcdda=disabled \
     -Ddvdnav=disabled \

@@ -3,7 +3,7 @@
 use std::os::raw::c_int;
 
 use jfn_platform_abi::{
-    LogicalPoint, MenuDelivery, MenuItem, MenuKind, MenuRequest, MenuSelection,
+    MenuDelivery, MenuItem, MenuKind, MenuOpenError, MenuRequest, MenuSelection, WindowPoint,
 };
 
 use crate::shell::actor::{Target, Work};
@@ -90,12 +90,17 @@ impl Item {
 /// Raises the edit menu for `field` at `anchor`, in window coordinates. A
 /// selection posts [`crate::shell::actor::Work::EditAt`] naming `field`; a dismissal
 /// posts nothing. No accelerator text is drawn.
-pub fn open_edit(field: &Snapshot, anchor: LogicalPoint, strings: &Strings) {
+pub fn open_edit(
+    field: &Snapshot,
+    anchor: WindowPoint,
+    basis: jfn_platform_abi::WindowBasis,
+    strings: &Strings,
+) -> Result<(), MenuOpenError> {
     let Some(lease) = jfn_platform_abi::try_lease() else {
-        return;
+        return Ok(());
     };
     let MenuDelivery::Host(host) = lease.platform().menu_delivery(MenuKind::ContextMenu) else {
-        return;
+        return Ok(());
     };
     let items = Item::ALL
         .into_iter()
@@ -109,8 +114,8 @@ pub fn open_edit(field: &Snapshot, anchor: LogicalPoint, strings: &Strings) {
     let id = field.id.clone();
     host.open(MenuRequest {
         items,
-        x: anchor.x,
-        y: anchor.y,
+        anchor,
+        basis,
         width: 0,
         initial: jfn_platform_abi::MENU_DISMISSED,
         on_selected: MenuSelection::new(move |selected| {
@@ -122,7 +127,8 @@ pub fn open_edit(field: &Snapshot, anchor: LogicalPoint, strings: &Strings) {
                 command: item.command(),
             });
         }),
-    });
+    })
+    .map(drop)
 }
 
 #[cfg(test)]
