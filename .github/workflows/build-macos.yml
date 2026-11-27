@@ -87,11 +87,18 @@ jobs:
       - name: Create DMG
         run: |
           brew install create-dmg
-          APP_NAME="Jellium Desktop"
+          APP_NAME="Jellium Desktop - EAJelly"
           VERSION="${{ steps.version.outputs.version }}"
           ARCH="${{ matrix.arch }}"
           DMG_NAME="JelliumDesktop-${VERSION}-macos-${ARCH}.dmg"
+          APP_PATH="build/output/${APP_NAME}.app"
           mkdir -p dist
+
+          if [ ! -d "${APP_PATH}" ]; then
+            echo "App bundle not found: ${APP_PATH}"
+            find build/output -maxdepth 2 -name '*.app' -print || true
+            exit 1
+          fi
 
           # create-dmg returns non-zero if icon positioning fails (no icon), ignore that
           create-dmg \
@@ -101,7 +108,7 @@ jobs:
             --icon-size 100 \
             --icon "${APP_NAME}.app" 125 150 \
             --app-drop-link 375 150 \
-            "dist/${DMG_NAME}" "build/output/${APP_NAME}.app" || true
+            "dist/${DMG_NAME}" "${APP_PATH}" || true
 
           # Verify DMG was created
           if [ ! -f "dist/${DMG_NAME}" ]; then

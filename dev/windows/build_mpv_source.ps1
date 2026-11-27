@@ -87,6 +87,11 @@ function ConvertTo-MsysPath($WinPath) {
 }
 
 $MsysMpvSource = ConvertTo-MsysPath $MpvSourceDir
+$MsysPkgConfig = if ($Arch -eq "arm64") {
+    "/clangarm64/bin/pkg-config.exe"
+} else {
+    "/clang64/bin/pkg-config.exe"
+}
 
 # Run a command in MSYS2
 function Invoke-Msys2 {
@@ -156,6 +161,8 @@ if ($Force -and (Test-Path $MesonBuildDir)) {
 if (-not (Test-Path (Join-Path $MesonBuildDir "build.ninja"))) {
     Invoke-Msys2 @"
 cd '$MsysMpvSource' && \
+export PKG_CONFIG='$MsysPkgConfig' && \
+test -x '$MsysPkgConfig' && '$MsysPkgConfig' --version && \
 meson setup build --default-library=shared \
     -Dlibmpv=true \
     -Dcplayer=true \
